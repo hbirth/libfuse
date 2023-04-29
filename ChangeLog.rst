@@ -1,3 +1,15 @@
+libfuse 3.14.1 (2023-03-26)
+===========================
+
+* The extended attribute name passed to the setxattr() handler is no longer
+  truncated at the beginning (bug introduced in 3.13.0).
+  
+* As a result of the above, the additional setattr() flags introduced in 3.14 are no
+  longer available for now. They will hopefully be reintroduced in the next release.
+
+* Further improvements of configuration header handling.
+
+
 libfuse 3.14.0 (2023-02-17)
 ===========================
 
@@ -45,7 +57,7 @@ The following changes apply when using the most recent API (-DFUSE_USE_VERSION=3
 see `example/passthrough_hp.cc` for an example for how to usse the new API):
 
 * `struct fuse_loop_config` is now private and has to be constructed using
-  *fuse_loop_cfg_create()* and detroyed with *fuse_loop_cfg_destroy()*.  Parameters can be
+  *fuse_loop_cfg_create()* and destroyed with *fuse_loop_cfg_destroy()*.  Parameters can be
   changed using `fuse_loop_cfg_set_*()` functions.
 
 * *fuse_session_loop_mt()* now accepts `struct fuse_loop_config *` as NULL pointer.
