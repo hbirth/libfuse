@@ -475,7 +475,7 @@ struct fuse_operations {
 	 * the file.
 	 */
 	int (*atomic_open) (const char *, struct stat *buf,
-			    struct fuse_file_info *);
+			    mode_t mode, struct fuse_file_info *);
 
 	/** Read data from an open file
 	 *
@@ -1287,7 +1287,7 @@ ssize_t fuse_fs_copy_file_range(struct fuse_fs *fs, const char *path_in,
 off_t fuse_fs_lseek(struct fuse_fs *fs, const char *path, off_t off, int whence,
 		    struct fuse_file_info *fi);
 int fuse_fs_atomic_open(struct fuse_fs *fs, const char *path,
-			struct stat *buf, struct fuse_file_info *fi);
+			struct stat *buf, mode_t mode, struct fuse_file_info *fi);
 void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn,
 		struct fuse_config *cfg);
 void fuse_fs_destroy(struct fuse_fs *fs);

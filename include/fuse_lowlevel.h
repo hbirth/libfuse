@@ -1292,7 +1292,7 @@ struct fuse_lowlevel_ops {
 	 * @param fi file information
 	 */
 	void (*atomic_open) (fuse_req_t req, fuse_ino_t parent,
-			     const char *name, struct fuse_file_info *fi);
+			     const char *name, mode_t mode, struct fuse_file_info *fi);
 };
 
 /**

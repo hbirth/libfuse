@@ -1366,13 +1366,13 @@ static void do_atomic_open(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 
 		memset(&fi, 0, sizeof(fi));
 		fi.flags = arg->flags;
-
+		
 		if (req->se->conn.proto_minor >= 12)
 			req->ctx.umask = arg->umask;
 		else
 			name = (char *) inarg + sizeof(struct fuse_open_in);
 
-		req->se->op.atomic_open(req, nodeid, name, &fi);
+		req->se->op.atomic_open(req, nodeid, name, arg->mode, &fi);
 
 	} else
 		fuse_reply_err(req, ENOSYS);
