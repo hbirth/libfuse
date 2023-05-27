@@ -593,6 +593,7 @@ static struct lo_dirp *lo_dirp(struct fuse_file_info *fi)
 	return (struct lo_dirp *) (uintptr_t) fi->fh;
 }
 
+
 static void lo_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
 	int error = ENOMEM;
@@ -752,6 +753,30 @@ static void lo_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 	fuse_reply_err(req, 0);
 }
 
+static bool lo_do_create(fuse_req_t req, fuse_ino_t parent, const char * name,
+			 mode_t mode, struct fuse_file_info *fi) {
+	int fd;
+	struct lo_data *lo = lo_data(req);
+
+	if (lo_debug(req))
+		fuse_log(FUSE_LOG_DEBUG, "lo_create(parent=%" PRIu64 ", name=%s)\n",
+			parent, name);
+
+	fd = openat(lo_fd(req, parent), name,
+		    (fi->flags | O_CREAT) & ~O_NOFOLLOW, mode);
+	if (fd == -1)
+		return false;
+
+	fi->fh = fd;
+	if (lo->cache == CACHE_NEVER)
+		fi->direct_io = 1;
+	else if (lo->cache == CACHE_ALWAYS)
+		fi->keep_cache = 1;
+
+	return true;
+
+}
+
 static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		      mode_t mode, struct fuse_file_info *fi)
 {
@@ -795,6 +820,42 @@ static void lo_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
+static bool lo_do_open(fuse_req_t req, fuse_ino_t ino,
+		       struct fuse_file_info *fi)
+{
+	int fd;
+	char buf[64];
+	struct lo_data *lo = lo_data(req);
+
+	/* With writeback cache, kernel may send read requests even
+	   when userspace opened write-only */
+	if (lo->writeback && (fi->flags & O_ACCMODE) == O_WRONLY) {
+		fi->flags &= ~O_ACCMODE;
+		fi->flags |= O_RDWR;
+	}
+
+	/* With writeback cache, O_APPEND is handled by the kernel.
+	   This breaks atomicity (since the file may change in the
+	   underlying filesystem, so that the kernel's idea of the
+	   end of the file isn't accurate anymore). In this example,
+	   we just accept that. A more rigorous filesystem may want
+	   to return an error here */
+	if (lo->writeback && (fi->flags & O_APPEND))
+		fi->flags &= ~O_APPEND;
+	
+	sprintf(buf, "/proc/self/fd/%i", lo_fd(req, ino));
+	fd = open(buf, fi->flags & ~O_NOFOLLOW);
+	if (fd == -1)
+		return false;
+
+	fi->fh = fd;
+	if (lo->cache == CACHE_NEVER)
+		fi->direct_io = 1;
+	else if (lo->cache == CACHE_ALWAYS)
+		fi->keep_cache = 1;
+	return true;
+}
+
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
 	int fd;
@@ -833,6 +894,57 @@ static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 		fi->keep_cache = 1;
 	fuse_reply_open(req, fi);
 }
+
+
+static void unref_inode(struct lo_data *lo,
+			struct lo_inode *inode, uint64_t n);
+
+static void lo_atomic_open(fuse_req_t req, fuse_ino_t parent,
+			   const char *name, mode_t mode, struct fuse_file_info *fi)
+{
+	struct fuse_entry_param e;
+	int saveerr;
+	bool success;
+	struct lo_data *lo = lo_data(req);
+
+	if (lo_debug(req))
+		fuse_log(FUSE_LOG_DEBUG, "lo_atomic_open(parent=%" PRIu64 ", name=%s)\n",
+			 parent, name);
+
+	
+	if (fi->flags & O_CREAT) {
+		success = lo_do_create(req, parent, name, mode, fi);
+		if (!success) {
+			saveerr = errno;
+			goto out_err;
+		}
+
+		saveerr = lo_do_lookup(req, parent, name, &e);
+		if (saveerr)
+			goto out_err;
+		
+	} else {
+		saveerr = lo_do_lookup(req, parent, name, &e);
+		if (saveerr)
+			goto out_err;
+			
+		success = lo_do_open(req, e.ino, fi);
+		if (!success) {
+			saveerr = errno;
+			struct lo_inode *ino = lo_inode(req, e.ino);
+			unref_inode(lo, ino, 1);
+			goto out_err;
+		}
+	}
+
+	fuse_reply_atomic_open(req, &e, fi);
+	return;
+
+out_err:
+	fuse_reply_err(req, saveerr);
+}
+
+
 
 static void lo_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
@@ -1160,6 +1272,7 @@ static const struct fuse_lowlevel_ops lo_oper = {
 	.fsyncdir	= lo_fsyncdir,
 	.create		= lo_create,
 	.open		= lo_open,
+	.atomic_open    = lo_atomic_open,
 	.release	= lo_release,
 	.flush		= lo_flush,
 	.fsync		= lo_fsync,
