@@ -49,6 +49,9 @@ typedef uint64_t fuse_ino_t;
 /** Request pointer type */
 typedef struct fuse_req *fuse_req_t;
 
+/* Forward declaration */
+struct statx;
+
 /**
  * Session
  *
@@ -1365,6 +1368,22 @@ struct fuse_lowlevel_ops {
 			mode_t mode, struct fuse_file_info *fi);
 
 	/**
+	 * Get extended file attributes.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_statx
+	 *   fuse_reply_err
+	 *
+	 * @param req request handle
+	 * @param ino the inode number
+	 * @param flags bitmask of requested flags
+	 * @param mask bitmask of requested fields
+	 * @param fi file information (may be NULL)
+	 */
+	void (*statx)(fuse_req_t req, fuse_ino_t ino, int flags, int mask,
+		      struct fuse_file_info *fi);
+
+	/**
 	 * Request a lock for the given byterange
 	 *
 	 * This has only an important role when writeback caching is used.
@@ -1808,6 +1827,20 @@ int fuse_reply_poll(fuse_req_t req, unsigned revents);
  * @return zero for success, -errno for failure to send reply
  */
 int fuse_reply_lseek(fuse_req_t req, off_t off);
+
+/**
+ * Reply with extended file attributes.
+ *
+ * Possible requests:
+ *   statx
+ *
+ * @param req request handle
+ * @param flags statx flags
+ * @param statx the attributes
+ * @param attr_timeout	validity timeout (in seconds) for the attributes
+ * @return zero for success, -errno for failure to send reply
+ */
+int fuse_reply_statx(fuse_req_t req, int flags, struct statx *statx, double attr_timeout);
 
 /* ----------------------------------------------------------- *
  * Notification						       *

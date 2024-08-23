@@ -7,7 +7,7 @@
 */
 
 #include <linux/limits.h>
-#define FUSE_USE_VERSION 317
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
 #include <algorithm>
 #include <stdio.h>
@@ -1088,6 +1088,9 @@ static const struct fuse_lowlevel_ops memfs_oper = {
 	.copy_file_range = nullptr,
 	.lseek = nullptr,
 	.tmpfile = nullptr,
+#ifdef HAVE_STATX
+	.statx = nullptr,
+#endif
 	.dlm_lock = nullptr,
 	.compound = nullptr
 };

@@ -1335,6 +1335,33 @@ int fuse_reply_lseek(fuse_req_t req, off_t off)
 	return send_reply_ok(req, &arg, sizeof(arg));
 }
 
+#ifdef HAVE_STATX
+int fuse_reply_statx(fuse_req_t req, int flags, struct statx *statx,
+		     double attr_timeout)
+{
+	struct fuse_statx_out arg;
+
+	memset(&arg, 0, sizeof(arg));
+	arg.flags = flags;
+	arg.attr_valid = calc_timeout_sec(attr_timeout);
+	arg.attr_valid_nsec = calc_timeout_nsec(attr_timeout);
+	memcpy(&arg.stat, statx, sizeof(arg.stat));
+
+	return send_reply_ok(req, &arg, sizeof(arg));
+}
+#else
+int fuse_reply_statx(fuse_req_t req, int flags, struct statx *statx,
+		     double attr_timeout)
+{
+	(void)req;
+	(void)flags;
+	(void)statx;
+	(void)attr_timeout;
+
+	return -ENOSYS;
+}
+#endif
+
 int fuse_reply_compound(fuse_req_t req, uint32_t count,
 			const void *results, size_t results_size)
 {
@@ -2744,6 +2771,42 @@ static void do_lseek(fuse_req_t req, const fuse_ino_t nodeid, const void *inarg)
 	_do_lseek(req, nodeid, inarg, NULL);
 }
 
+#ifdef HAVE_STATX
+static void _do_statx(fuse_req_t req, const fuse_ino_t nodeid,
+		      const void *op_in, const void *in_payload)
+{
+	(void)in_payload;
+	const struct fuse_statx_in *arg = op_in;
+	struct fuse_file_info *fip = NULL;
+	struct fuse_file_info fi;
+
+	if (arg->getattr_flags & FUSE_GETATTR_FH) {
+		memset(&fi, 0, sizeof(fi));
+		fi.fh = arg->fh;
+		fip = &fi;
+	}
+
+	if (req->se->op.statx)
+		req->se->op.statx(req, nodeid, arg->sx_flags, arg->sx_mask, fip);
+	else
+		fuse_reply_err(req, ENOSYS);
+}
+#else
+static void _do_statx(fuse_req_t req, const fuse_ino_t nodeid,
+		      const void *op_in, const void *in_payload)
+{
+	(void)in_payload;
+	(void)req;
+	(void)nodeid;
+	(void)op_in;
+}
+#endif
+
+static void do_statx(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	_do_statx(req, nodeid, inarg, NULL);
+}
+
 void fuse_compound_set_error(fuse_req_t req, int error)
 {
 	req->compound.error = error;
@@ -3566,6 +3629,7 @@ static struct {
 	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]	   = { do_lseek,       "LSEEK"	     },
+	[FUSE_STATX]	   = { do_statx,       "STATX"	     },
 	[FUSE_DLM_WB_LOCK] = { do_dlm_lock,	"DLM_WB_LOCK" },
 	[FUSE_COMPOUND]	   = { do_compound,    "COMPOUND"    },
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
@@ -3622,6 +3686,7 @@ static struct {
 	[FUSE_RENAME2]		= { _do_rename2,	"RENAME2" },
 	[FUSE_COPY_FILE_RANGE]	= { _do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]		= { _do_lseek,		"LSEEK" },
+	[FUSE_STATX]		= { _do_statx,		"STATX" },
 	[FUSE_COMPOUND]		= { _do_compound,	"COMPOUND" },
 	[FUSE_DLM_WB_LOCK]	= { _do_dlm_lock,	"DLM_WB_LOCK" },
 	[CUSE_INIT]		= { _cuse_lowlevel_init, "CUSE_INIT" },
