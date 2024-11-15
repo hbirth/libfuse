@@ -308,31 +308,15 @@ static struct lo_inode *lo_find(struct lo_data *lo, struct stat *st)
 	return ret;
 }
 
-/* 	This function does almost the same as lo_do_lookup() only with an already open fd.
-	Additionally it will not close the fd on finding the inode and even the lookup
-	can be disabled by assuring that we need a new inode when 'newinode' is true.
-*/
-static int fill_fuse_entry_param(fuse_req_t req, fuse_ino_t parent, int fd, struct fuse_entry_param *e, bool newinode)
+
+static struct lo_inode *create_new_inode(int fd, struct fuse_entry_param *e, struct lo_data* lo)
 {
-	int res;
-	struct lo_data *lo = lo_data(req);
-	struct lo_inode *inode = NULL;
-
-	memset(e, 0, sizeof(*e));
-	e->attr_timeout = lo->timeout;
-	e->entry_timeout = lo->timeout;
-
-	res = fstatat(fd, "", &e->attr, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
-	if (res == -1)
-		return errno;
-
-	if (!newinode)
-		inode = lo_find(lo_data(req), &e->attr);
-	if (!inode) {
+		struct lo_inode *inode = NULL;
 		struct lo_inode *prev, *next;
+		
 		inode = calloc(1, sizeof(struct lo_inode));
 		if (!inode)
-			return errno;
+			return NULL;
 
 		inode->refcount = 1;
 		inode->fd = fd;
@@ -347,8 +331,23 @@ static int fill_fuse_entry_param(fuse_req_t req, fuse_ino_t parent, int fd, stru
 		inode->prev = prev;
 		prev->next = inode;
 		pthread_mutex_unlock(&lo->mutex);
-	}
-	e->ino = (uintptr_t) inode;
+		return inode;
+}
+
+static int fill_entry_param_new_inode(fuse_req_t req, fuse_ino_t parent, int fd, struct fuse_entry_param *e)
+{
+	int res;
+	struct lo_data *lo = lo_data(req);
+
+	memset(e, 0, sizeof(*e));
+	e->attr_timeout = lo->timeout;
+	e->entry_timeout = lo->timeout;
+
+	res = fstatat(fd, "", &e->attr, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+	if (res == -1)
+		return errno;
+
+	e->ino = (uintptr_t) create_new_inode(dup(fd), e, lo);
 
 	if (lo_debug(req))
 		fuse_log(FUSE_LOG_DEBUG, "  %lli/%lli -> %lli\n",
@@ -384,26 +383,9 @@ static int lo_do_lookup(fuse_req_t req, fuse_ino_t parent, const char *name,
 		close(newfd);
 		newfd = -1;
 	} else {
-		struct lo_inode *prev, *next;
-
-		saverr = ENOMEM;
-		inode = calloc(1, sizeof(struct lo_inode));
+		inode = create_new_inode(newfd, e, lo);
 		if (!inode)
 			goto out_err;
-
-		inode->refcount = 1;
-		inode->fd = newfd;
-		inode->ino = e->attr.st_ino;
-		inode->dev = e->attr.st_dev;
-
-		pthread_mutex_lock(&lo->mutex);
-		prev = &lo->root;
-		next = prev->next;
-		next->prev = inode;
-		inode->next = next;
-		inode->prev = prev;
-		prev->next = inode;
-		pthread_mutex_unlock(&lo->mutex);
 	}
 	e->ino = (uintptr_t) inode;
 
@@ -832,7 +814,7 @@ static void lo_tmpfile(fuse_req_t req, fuse_ino_t parent,
 	   in current function. */
 	fi->parallel_direct_writes = 1; 
 	
-	err = fill_fuse_entry_param(req, parent, fd, &e, true); 
+	err = fill_entry_param_new_inode(req, parent, fd, &e); 
 	if (err)
 		fuse_reply_err(req, err);
 	else
