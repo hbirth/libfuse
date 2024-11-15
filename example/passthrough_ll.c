@@ -311,27 +311,27 @@ static struct lo_inode *lo_find(struct lo_data *lo, struct stat *st)
 
 static struct lo_inode *create_new_inode(int fd, struct fuse_entry_param *e, struct lo_data* lo)
 {
-		struct lo_inode *inode = NULL;
-		struct lo_inode *prev, *next;
-		
-		inode = calloc(1, sizeof(struct lo_inode));
-		if (!inode)
-			return NULL;
+	struct lo_inode *inode = NULL;
+	struct lo_inode *prev, *next;
+	
+	inode = calloc(1, sizeof(struct lo_inode));
+	if (!inode)
+		return NULL;
 
-		inode->refcount = 1;
-		inode->fd = fd;
-		inode->ino = e->attr.st_ino;
-		inode->dev = e->attr.st_dev;
+	inode->refcount = 1;
+	inode->fd = fd;
+	inode->ino = e->attr.st_ino;
+	inode->dev = e->attr.st_dev;
 
-		pthread_mutex_lock(&lo->mutex);
-		prev = &lo->root;
-		next = prev->next;
-		next->prev = inode;
-		inode->next = next;
-		inode->prev = prev;
-		prev->next = inode;
-		pthread_mutex_unlock(&lo->mutex);
-		return inode;
+	pthread_mutex_lock(&lo->mutex);
+	prev = &lo->root;
+	next = prev->next;
+	next->prev = inode;
+	inode->next = next;
+	inode->prev = prev;
+	prev->next = inode;
+	pthread_mutex_unlock(&lo->mutex);
+	return inode;
 }
 
 static int fill_entry_param_new_inode(fuse_req_t req, fuse_ino_t parent, int fd, struct fuse_entry_param *e)
