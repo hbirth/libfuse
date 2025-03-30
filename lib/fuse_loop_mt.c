@@ -63,14 +63,12 @@ struct fuse_worker {
 	struct fuse_mt *mt;
 };
 
+/* synchronization via se->mt_lock */
 struct fuse_mt {
-	pthread_mutex_t lock;
 	int numworker;
 	int numavail;
 	struct fuse_session *se;
 	struct fuse_worker main;
-	sem_t finish;
-	int exit;
 	int error;
 	int clone_fd;
 	int max_idle;
@@ -141,30 +139,30 @@ static void *fuse_do_work(void *data)
 {
 	struct fuse_worker *w = (struct fuse_worker *) data;
 	struct fuse_mt *mt = w->mt;
+	struct fuse_session *se = mt->se;
 
 	pthread_setname_np(pthread_self(), "fuse_worker");
 
-	while (!fuse_session_exited(mt->se)) {
+	while (!fuse_session_exited(se)) {
 		int isforget = 0;
 		int res;
 
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-		res = fuse_session_receive_buf_internal(mt->se, &w->fbuf,
-							w->ch);
+		res = fuse_session_receive_buf_internal(se, &w->fbuf, w->ch);
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 		if (res == -EINTR)
 			continue;
 		if (res <= 0) {
 			if (res < 0) {
-				fuse_session_exit(mt->se);
+				fuse_session_exit(se);
 				mt->error = res;
 			}
 			break;
 		}
 
-		pthread_mutex_lock(&mt->lock);
-		if (mt->exit) {
-			pthread_mutex_unlock(&mt->lock);
+		pthread_mutex_lock(&se->mt_lock);
+		if (fuse_session_exited(se)) {
+			pthread_mutex_unlock(&se->mt_lock);
 			return NULL;
 		}
 
@@ -184,11 +182,11 @@ static void *fuse_do_work(void *data)
 			mt->numavail--;
 		if (mt->numavail == 0 && mt->numworker < mt->max_threads)
 			fuse_loop_start_thread(mt);
-		pthread_mutex_unlock(&mt->lock);
+		pthread_mutex_unlock(&se->mt_lock);
 
-		fuse_session_process_buf_internal(mt->se, &w->fbuf, w->ch);
+		fuse_session_process_buf_internal(se, &w->fbuf, w->ch);
 
-		pthread_mutex_lock(&mt->lock);
+		pthread_mutex_lock(&se->mt_lock);
 		if (!isforget)
 			mt->numavail++;
 
@@ -199,14 +197,14 @@ static void *fuse_do_work(void *data)
 		 * delayed, a moving average might be useful for that.
 		 */
 		if (mt->max_idle != -1 && mt->numavail > mt->max_idle && mt->numworker > 1) {
-			if (mt->exit) {
-				pthread_mutex_unlock(&mt->lock);
+			if (fuse_session_exited(se)) {
+				pthread_mutex_unlock(&se->mt_lock);
 				return NULL;
 			}
 			list_del_worker(w);
 			mt->numavail--;
 			mt->numworker--;
-			pthread_mutex_unlock(&mt->lock);
+			pthread_mutex_unlock(&se->mt_lock);
 
 			pthread_detach(w->thread_id);
 			fuse_buf_free(&w->fbuf);
@@ -214,11 +212,10 @@ static void *fuse_do_work(void *data)
 			free(w);
 			return NULL;
 		}
-		pthread_mutex_unlock(&mt->lock);
+		pthread_mutex_unlock(&se->mt_lock);
 	}
 
-	sem_post(&mt->finish);
-
+	sem_post(&se->mt_finish);
 	return NULL;
 }
 
@@ -362,9 +359,9 @@ static int fuse_loop_start_thread(struct fuse_mt *mt)
 static void fuse_join_worker(struct fuse_mt *mt, struct fuse_worker *w)
 {
 	pthread_join(w->thread_id, NULL);
-	pthread_mutex_lock(&mt->lock);
+	pthread_mutex_lock(&mt->se->mt_lock);
 	list_del_worker(w);
-	pthread_mutex_unlock(&mt->lock);
+	pthread_mutex_unlock(&mt->se->mt_lock);
 	fuse_buf_free(&w->fbuf);
 	fuse_chan_put(w->ch);
 	free(w);
@@ -399,24 +396,23 @@ int fuse_session_loop_mt_312(struct fuse_session *se, struct fuse_loop_config *c
 	mt.max_threads = config->max_threads;
 	mt.main.thread_id = pthread_self();
 	mt.main.prev = mt.main.next = &mt.main;
-	sem_init(&mt.finish, 0, 0);
-	pthread_mutex_init(&mt.lock, NULL);
 
 	/* threads reading requests from /dev/fuse */
-	pthread_mutex_lock(&mt.lock);
+	pthread_mutex_lock(&se->mt_lock);
 	err = fuse_loop_start_thread(&mt);
-	pthread_mutex_unlock(&mt.lock);
+	pthread_mutex_unlock(&se->mt_lock);
 
 	if (!err) {
-		/* sem_wait() is interruptible */
 		while (!fuse_session_exited(se))
-			sem_wait(&mt.finish);
+			sem_wait(&se->mt_finish);
+		if (se->debug)
+			fuse_log(FUSE_LOG_DEBUG,
+				 "fuse: session exited, terminating workers\n");
 
-		pthread_mutex_lock(&mt.lock);
+		pthread_mutex_lock(&se->mt_lock);
 		for (w = mt.main.next; w != &mt.main; w = w->next)
 			pthread_cancel(w->thread_id);
-		mt.exit = 1;
-		pthread_mutex_unlock(&mt.lock);
+		pthread_mutex_unlock(&se->mt_lock);
 
 		while (mt.main.next != &mt.main)
 			fuse_join_worker(&mt, mt.main.next);
@@ -427,12 +423,9 @@ int fuse_session_loop_mt_312(struct fuse_session *se, struct fuse_loop_config *c
 			fuse_uring_stop(se);
 	}
 
-	pthread_mutex_destroy(&mt.lock);
-	sem_destroy(&mt.finish);
+	pthread_mutex_destroy(&se->mt_lock);
 	if(se->error != 0)
 		err = se->error;
-
-	fuse_session_reset(se);
 
 	if (created_config) {
 		fuse_loop_cfg_destroy(config);

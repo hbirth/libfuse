@@ -807,7 +807,8 @@ static void *fuse_uring_thread(void *arg)
 		goto err;
 	}
 
-	while (!se->exited) {
+	/* Not using fuse_session_exited(se), as that cannot be inlined */
+	while (!atomic_load_explicit(&se->mt_exited, memory_order_relaxed)) {
 		/* is always blocking here from this internal thread */
 		_fuse_uring_submit(queue, true);
 

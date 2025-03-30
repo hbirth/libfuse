@@ -25,6 +25,8 @@
 #include "mount_i_linux.h"
 #endif
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -4409,6 +4411,8 @@ void fuse_session_destroy(struct fuse_session *se)
 	if (llp != NULL)
 		fuse_ll_pipe_free(llp);
 	pthread_key_delete(se->pipe_key);
+	sem_destroy(&se->mt_finish);
+	pthread_mutex_destroy(&se->mt_lock);
 	pthread_mutex_destroy(&se->lock);
 	free(se->cuse_data);
 	if (se->fd != -1)
@@ -4773,6 +4777,8 @@ fuse_session_new_versioned(struct fuse_args *args,
 	list_init_nreq(&se->notify_list);
 	se->notify_ctr = 1;
 	pthread_mutex_init(&se->lock, NULL);
+	sem_init(&se->mt_finish, 0, 0);
+	pthread_mutex_init(&se->mt_lock, NULL);
 
 	err = pthread_key_create(&se->pipe_key, fuse_ll_pipe_destructor);
 	if (err) {
@@ -4799,6 +4805,8 @@ fuse_session_new_versioned(struct fuse_args *args,
 	return se;
 
 out5:
+	sem_destroy(&se->mt_finish);
+	pthread_mutex_destroy(&se->mt_lock);
 	pthread_mutex_destroy(&se->lock);
 out4:
 	fuse_opt_free_args(args);
@@ -5395,20 +5403,24 @@ int fuse_req_getgroups(fuse_req_t req, int size, gid_t list[])
 __attribute__((no_sanitize_thread))
 void fuse_session_exit(struct fuse_session *se)
 {
-	se->exited = 1;
+	atomic_store_explicit(&se->mt_exited, 1, memory_order_relaxed);
+	sem_post(&se->mt_finish);
 }
 
 __attribute__((no_sanitize_thread))
 void fuse_session_reset(struct fuse_session *se)
 {
-	se->exited = 0;
+	se->mt_exited = false;
 	se->error = 0;
 }
 
 __attribute__((no_sanitize_thread))
 int fuse_session_exited(struct fuse_session *se)
 {
-	return se->exited;
+	bool exited =
+		atomic_load_explicit(&se->mt_exited, memory_order_relaxed);
+
+	return exited ? 1 : 0;
 }
 
 static void fuse_tt_destruct(struct fuse_timeout_thread *tt)

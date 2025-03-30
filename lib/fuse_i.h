@@ -17,6 +17,8 @@
 
 #include "util.h"
 
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -115,7 +117,6 @@ enum fuse_sync_init {
 
 struct fuse_session {
 	_Atomic(char *)mountpoint;
-	volatile int exited;
 	int fd;
 	struct fuse_custom_io *io;
 	struct mount_opts *mo;
@@ -143,6 +144,11 @@ struct fuse_session {
 	 * a later version, to 'fix' it at run time.
 	 */
 	struct libfuse_version version;
+
+	/* thread synchronization */
+	_Atomic bool mt_exited;
+	pthread_mutex_t mt_lock;
+	sem_t mt_finish;
 
 	_Atomic bool buf_reallocable;
 
