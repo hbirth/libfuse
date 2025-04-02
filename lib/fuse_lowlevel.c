@@ -9,6 +9,7 @@
   See the file COPYING.LIB
 */
 
+#include "fuse_log.h"
 #include <stdbool.h>
 #define _GNU_SOURCE
 
@@ -489,6 +490,17 @@ int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 	fill_open(oarg, f);
 	return send_reply_ok(req, buf,
 			     entrysize + sizeof(struct fuse_open_out));
+}
+
+int fuse_reply_dlm_lock(fuse_req_t req, uint32_t locksize)
+{
+	struct fuse_dlm_lock_out arg;
+
+	memset(&arg, 0, sizeof(arg));
+	arg.locksize = locksize;
+	
+	fuse_log(FUSE_LOG_DEBUG, "send dlm lock reply size:%d size:%d\n", locksize, sizeof(arg));
+	return send_reply_ok(req, &arg, sizeof(arg));
 }
 
 int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
@@ -2122,6 +2134,27 @@ static void do_setlkw(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	_do_setlkw(req, nodeid, inarg, NULL);
 }
 
+static void _do_dlm_lock(fuse_req_t req, const fuse_ino_t nodeid,
+			 const void *inarg, const void *in_payload)
+{
+	(void)in_payload;
+	const struct fuse_dlm_lock_in *arg = (struct fuse_dlm_lock_in *) inarg;
+	struct fuse_file_info fi;
+
+	memset(&fi, 0, sizeof(fi));
+	fi.fh = arg->fh;
+
+	if (req->se->op.dlm_lock) {
+		req->se->op.dlm_lock(req, nodeid, arg->offset, arg->size, arg->type, &fi);
+	} else
+		fuse_reply_err(req, ENOSYS);
+}
+
+static void do_dlm_lock(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	_do_dlm_lock(req, nodeid, inarg, NULL);
+}
+
 static int find_interrupted(struct fuse_session *se, struct fuse_req *req)
 {
 	struct fuse_req *curr;
@@ -2738,8 +2771,7 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 
 	send_reply_ok(req, &outarg, outargsize);
 
-	if (se->uring.enable && se->conn.want_ext & FUSE_CAP_OVER_IO_URING &&
-	    se->uring.enable)
+	if (se->uring.enable && se->conn.want_ext & FUSE_CAP_OVER_IO_URING)
 		fuse_uring_start(se);
 }
 
@@ -3178,6 +3210,7 @@ static struct {
 	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]	   = { do_lseek,       "LSEEK"	     },
+	[FUSE_DLM_LOCK]		= { do_dlm_lock, "DLM_LOCK" },
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
 
@@ -3232,6 +3265,7 @@ static struct {
 	[FUSE_RENAME2]		= { _do_rename2,	"RENAME2" },
 	[FUSE_COPY_FILE_RANGE]	= { _do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]		= { _do_lseek,		"LSEEK" },
+	[FUSE_DLM_LOCK]		= { _do_dlm_lock, "DLM_LOCK" },
 	[CUSE_INIT]		= { _cuse_lowlevel_init, "CUSE_INIT" },
 };
 

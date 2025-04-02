@@ -37,6 +37,7 @@
 #define _GNU_SOURCE
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
 
+#include <sys/param.h>
 #include <fuse_lowlevel.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -46,6 +47,7 @@
 #include <string.h>
 #include <limits.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -314,7 +316,7 @@ static struct lo_inode *create_new_inode(int fd, struct fuse_entry_param *e, str
 {
 	struct lo_inode *inode = NULL;
 	struct lo_inode *prev, *next;
-	
+
 	inode = calloc(1, sizeof(struct lo_inode));
 	if (!inode)
 		return NULL;
@@ -711,7 +713,7 @@ static void lo_do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 					err = errno;
 					goto error;
 				} else {  // End of stream
-					break; 
+					break;
 				}
 			}
 		}
@@ -743,11 +745,11 @@ static void lo_do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 						    &st, nextoff);
 		}
 		if (entsize > rem) {
-			if (entry_ino != 0) 
+			if (entry_ino != 0)
 				lo_forget_one(req, entry_ino, 1);
 			break;
 		}
-		
+
 		p += entsize;
 		rem -= entsize;
 
@@ -789,6 +791,17 @@ static void lo_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 	fuse_reply_err(req, 0);
 }
 
+static void lo_dlm_lock(fuse_req_t req, fuse_ino_t ino,
+			off_t offset, uint32_t size, uint32_t type,
+			struct fuse_file_info *fi)
+{
+	if (lo_debug(req))
+		fuse_log(FUSE_LOG_DEBUG, "lo_dlm_lock requested(%ld %ld %d)",
+			 ino, offset, size);
+
+	fuse_reply_dlm_lock(req, MAX(size, 1024 * 1024));
+}
+
 static void lo_tmpfile(fuse_req_t req, fuse_ino_t parent,
 		      mode_t mode, struct fuse_file_info *fi)
 {
@@ -815,9 +828,9 @@ static void lo_tmpfile(fuse_req_t req, fuse_ino_t parent,
 	/* parallel_direct_writes feature depends on direct_io features.
 	   To make parallel_direct_writes valid, need set fi->direct_io
 	   in current function. */
-	fi->parallel_direct_writes = 1; 
-	
-	err = fill_entry_param_new_inode(req, parent, fd, &e); 
+	fi->parallel_direct_writes = 1;
+
+	err = fill_entry_param_new_inode(req, parent, fd, &e);
 	if (err)
 		fuse_reply_err(req, err);
 	else
@@ -1266,6 +1279,7 @@ static const struct fuse_lowlevel_ops lo_oper = {
 	.copy_file_range = lo_copy_file_range,
 #endif
 	.lseek		= lo_lseek,
+	.dlm_lock	= lo_dlm_lock,
 };
 
 int main(int argc, char *argv[])

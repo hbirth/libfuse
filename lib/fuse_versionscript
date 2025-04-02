@@ -207,6 +207,7 @@ FUSE_3.18 {
 		fuse_req_is_uring;
 		fuse_uring_set_payload_allocator;
 		fuse_uring_get_req_payload_mr;
+		fuse_reply_dlm_lock;
 } FUSE_3.17;
 
 # Local Variables:
