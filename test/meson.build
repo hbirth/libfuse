@@ -25,6 +25,9 @@ td += executable('test_signals', 'test_signals.c',
 td += executable('test_teardown_watchdog', 'test_teardown_watchdog.c',
                  dependencies: [ libfuse_dep, thread_dep ],
                  install: false)
+td += executable('test_abi', 'test_abi.c',
+                 dependencies: [ libfuse_dep ],
+                 install: false)
 
 test_scripts = [ 'conftest.py', 'pytest.ini', 'test_examples.py',
                  'util.py', 'test_ctests.py', 'test_custom_io.py',
