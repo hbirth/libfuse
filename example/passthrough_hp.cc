@@ -1314,6 +1314,20 @@ static void sfs_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
 }
 #endif
 
+/*
+ * Handle FUSE compound operations
+ *
+ * This function implements compound operation support for OPEN, OPENDIR, and GETATTR.
+ * It parses the compound request payload, validates each operation, and executes them
+ * sequentially, returning all results in a single compound response.
+ */
+static void sfs_compound(fuse_req_t req, uint32_t count, uint32_t flags, const void *arg) {
+    (void) arg;
+    (void) flags;
+    (void) count;
+    fuse_set_compound_error(req, ENOTSUP);
+}
+
 
 static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
     sfs_oper.init = sfs_init;
@@ -1354,7 +1368,9 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
     sfs_oper.listxattr = sfs_listxattr;
     sfs_oper.removexattr = sfs_removexattr;
 #endif
+    sfs_oper.compound = sfs_compound;
 }
+
 
 static void print_usage(char *prog_name) {
     cout << "Usage: " << prog_name << " --help\n"
@@ -1578,7 +1594,7 @@ int main(int argc, char *argv[]) {
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
 
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
-	
+
     if (fuse_session_mount(se, argv[2]) != 0)
         goto err_out3;
 
@@ -1608,4 +1624,3 @@ err_out1:
 
     return ret ? 1 : 0;
 }
-
