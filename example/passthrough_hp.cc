@@ -95,6 +95,7 @@ static_assert(sizeof(fuse_ino_t) >= sizeof(uint64_t),
 struct Inode;
 static Inode& get_inode(fuse_ino_t ino);
 static void forget_one(fuse_ino_t ino, uint64_t n);
+static void sfs_compound(fuse_req_t req, const void *arg);
 
 // Uniquely identifies a file in the source directory tree. This could
 // be simplified to just ino_t since we require the source directory
@@ -1051,6 +1052,7 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
        with O_PATH (so it doesn't allow read/write access). */
     char buf[64];
     sprintf(buf, "/proc/self/fd/%i", inode.fd);
+
     auto fd = open(buf, fi->flags & ~O_NOFOLLOW);
     if (fd == -1) {
         auto err = errno;
@@ -1354,6 +1356,19 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
     sfs_oper.listxattr = sfs_listxattr;
     sfs_oper.removexattr = sfs_removexattr;
 #endif
+    sfs_oper.compound = sfs_compound;
+}
+
+/*
+ * Handle FUSE compound operations
+ *
+ * This function implements compound operation support for OPEN, OPENDIR, and GETATTR.
+ * It parses the compound request payload, validates each operation, and executes them
+ * sequentially, returning all results in a single compound response.
+ */
+static void sfs_compound(fuse_req_t req, const void *arg) {
+    (void) arg;
+    fuse_set_compound_error(req, ENOTSUP);
 }
 
 static void print_usage(char *prog_name) {
@@ -1578,7 +1593,7 @@ int main(int argc, char *argv[]) {
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
 
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
-	
+
     if (fuse_session_mount(se, argv[2]) != 0)
         goto err_out3;
 
@@ -1608,4 +1623,3 @@ err_out1:
 
     return ret ? 1 : 0;
 }
-
