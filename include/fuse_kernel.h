@@ -436,6 +436,8 @@ struct fuse_file_lock {
  * FUSE_OVER_IO_URING: Indicate that Client supports io-uring
  * FUSE_INVAL_INODE_ENTRY: invalidate inode aliases when doing inode invalidation
  * FUSE_EXPIRE_INODE_ENTRY: expire inode aliases when doing inode invalidation
+ * FUSE_ALIGN_PG_ORDER: page order (power of 2 exponent for number of pages) for
+ *			optimal io-size alignment
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -483,6 +485,7 @@ struct fuse_file_lock {
 #define FUSE_DIRECT_IO_RELAX	FUSE_DIRECT_IO_ALLOW_MMAP
 #define FUSE_ALLOW_IDMAP	(1ULL << 40)
 #define FUSE_OVER_IO_URING	(1ULL << 41)
+#define FUSE_COMPOUND_OPS	(1ULL << 55)
 #define FUSE_INVAL_INODE_ENTRY  (1ULL << 60)
 #define FUSE_EXPIRE_INODE_ENTRY (1ULL << 61)
 
@@ -654,7 +657,9 @@ enum fuse_opcode {
 	FUSE_STATX		= 52,
 
 	/* Operations which have not been merged into upstream */
-	FUSE_DLM_WB_LOCK	= 100,
+	FUSE_DLM_WB_LOCK 	= 100,
+
+	FUSE_COMPOUND		= 127,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -915,7 +920,9 @@ struct fuse_init_out {
 	uint16_t	map_alignment;
 	uint32_t	flags2;
 	uint32_t	max_stack_depth;
-	uint32_t	unused[6];
+	uint8_t		align_page_order;
+	uint8_t		padding[3];
+	uint32_t	unused[5];
 };
 
 #define CUSE_INIT_INFO_MAX 4096
@@ -1260,12 +1267,32 @@ struct fuse_dlm_lock_out {
 	uint64_t reserved;
 };
 
+struct fuse_compound_in {
+	uint32_t	count;     /* Number of operations */
+	uint32_t	flags;     /* Compound flags */
+	/* Followed by complete fuse requests */
+};
+
+struct fuse_compound_out {
+	uint32_t	count;     /* Number of results */
+	uint32_t	flags;     /* Result flags */
+	/* Followed by complete fuse responses */
+};
+
+/* Compound flags */
+#define FUSE_COMPOUND_ATOMIC    (1 << 0)  /* All-or-nothing semantics */
+#define FUSE_COMPOUND_ORDERED   (1 << 1)  /* Operations must be sequential */
+#define FUSE_COMPOUND_CONTINUE  (1 << 2)  /* Continue on non-fatal errors */
+
+#define FUSE_MAX_COMPOUND_OPS   16        /* Maximum operations per compound */
+
 /**
  * Size of the ring buffer header
  */
 #define FUSE_URING_IN_OUT_HEADER_SZ 128
 #define FUSE_URING_OP_IN_OUT_SZ 128
 
+/* Used as part of the fuse_uring_req_header */
 struct fuse_uring_ent_in_out {
 	uint64_t flags;
 
@@ -1275,7 +1302,7 @@ struct fuse_uring_ent_in_out {
 	 */
 	uint64_t commit_id;
 
-	/* size of use payload buffer */
+	/* size of user payload buffer */
 	uint32_t payload_sz;
 	uint32_t padding;
 
@@ -1283,17 +1310,16 @@ struct fuse_uring_ent_in_out {
 };
 
 /**
- * This structure mapped onto the
+ * Header for all fuse-io-uring requests
  */
 struct fuse_uring_req_header {
-	/* struct fuse_in / struct fuse_out */
+	/* struct fuse_in_header / struct fuse_out_header */
 	char in_out[FUSE_URING_IN_OUT_HEADER_SZ];
 
-	/* per op code structs */
+	/* per op code header */
 	char op_in[FUSE_URING_OP_IN_OUT_SZ];
 
-	/* struct fuse_ring_in_out */
-	char ring_ent_in_out[sizeof(struct fuse_uring_ent_in_out)];
+	struct fuse_uring_ent_in_out ring_ent_in_out;
 };
 
 /**
@@ -1302,10 +1328,10 @@ struct fuse_uring_req_header {
 enum fuse_uring_cmd {
 	FUSE_IO_URING_CMD_INVALID = 0,
 
-	/* submit sqe to kernel to get a request */
+	/* register the request buffer and fetch a fuse request */
 	FUSE_IO_URING_CMD_REGISTER = 1,
 
-	/* commit result and fetch next request */
+	/* commit fuse request result and fetch next request */
 	FUSE_IO_URING_CMD_COMMIT_AND_FETCH = 2,
 };
 
@@ -1315,7 +1341,7 @@ enum fuse_uring_cmd {
 struct fuse_uring_cmd_req {
 	uint64_t flags;
 
-	/* entry identifier */
+	/* entry identifier for commits */
 	uint64_t commit_id;
 
 	/* queue the command is for (queue index) */

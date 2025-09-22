@@ -13,7 +13,6 @@
 
 #include "fuse_config.h"
 #include "fuse_i.h"
-#include "fuse_kernel.h"
 #include "fuse_opt.h"
 #include "fuse_misc.h"
 #include "mount_util.h"
@@ -1232,6 +1231,55 @@ int fuse_reply_lseek(fuse_req_t req, off_t off)
 	arg.offset = off;
 
 	return send_reply_ok(req, &arg, sizeof(arg));
+}
+
+int fuse_reply_compound(fuse_req_t req, uint32_t count,
+			const struct fuse_compound_result *results)
+{
+	if (count == 0 || count > FUSE_MAX_COMPOUND_OPS || !results) {
+		return fuse_reply_err(req, EINVAL);
+	}
+
+	/* Calculate total size needed by walking through the results buffer */
+	size_t header_size = sizeof(struct fuse_compound_out);
+	size_t results_size = 0;
+	uint32_t i;
+	const char *current_result = (const char *)results;
+
+	/* Walk through the results buffer to calculate total size */
+	for (i = 0; i < count; i++) {
+		const struct fuse_compound_result *result = (const struct fuse_compound_result *)current_result;
+		size_t result_len = result->hdr.len;
+
+		/* Each result in the buffer includes the fuse_out_header + response data */
+		/* The result->hdr.len tells us the size of (fuse_out_header + response data) */
+		results_size += result_len;
+
+		/* Move to the next result in the buffer */
+		current_result += result_len;
+	}
+
+	size_t total_size = header_size + results_size;
+
+	/* Allocate single buffer for header + results */
+	void *buffer = malloc(total_size);
+	if (!buffer) {
+		return fuse_reply_err(req, ENOMEM);
+	}
+
+	/* Fill in the header */
+	struct fuse_compound_out *header = (struct fuse_compound_out *)buffer;
+	header->count = count;
+	header->flags = 0;
+
+	/* Copy the results buffer directly after the header */
+	memcpy((char *)buffer + header_size, results, results_size);
+
+	/* Send as single buffer using send_reply_ok which handles io_uring properly */
+	int ret = send_reply_ok(req, buffer, total_size);
+
+	free(buffer);
+	return ret;
 }
 
 static void _do_lookup(fuse_req_t req, const fuse_ino_t nodeid,
@@ -2463,6 +2511,34 @@ static void do_lseek(fuse_req_t req, const fuse_ino_t nodeid, const void *inarg)
 	_do_lseek(req, nodeid, inarg, NULL);
 }
 
+static void _do_compound(fuse_req_t req, const fuse_ino_t nodeid,
+			 const void *op_in, const void *in_payload)
+{
+	(void)nodeid;
+	(void)in_payload;
+	const struct fuse_compound_in *arg = op_in;
+
+	/* Basic validation */
+	if (arg->count == 0 || arg->count > FUSE_MAX_COMPOUND_OPS) {
+		fuse_reply_err(req, EINVAL);
+		return;
+	}
+
+	if (!req->se->op.compound) {
+		fuse_reply_err(req, ENOSYS);
+		return;
+	}
+
+	/* Simple approach: pass raw payload to filesystem implementation
+	 * Let the filesystem handle parsing if it wants to support compound ops */
+	req->se->op.compound(req, op_in);
+}
+
+static void do_compound(fuse_req_t req, const fuse_ino_t nodeid, const void *inarg)
+{
+	_do_compound(req, nodeid, inarg, NULL);
+}
+
 static bool want_flags_valid(uint64_t capable, uint64_t want)
 {
 	uint64_t unknown_flags = want & (~capable);
@@ -2590,7 +2666,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 			se->conn.capable_ext |= FUSE_CAP_INVAL_INODE_ENTRY;
 		if (inargflags & FUSE_EXPIRE_INODE_ENTRY)
 			se->conn.capable_ext |= FUSE_CAP_EXPIRE_INODE_ENTRY;
-
+		if (inargflags & FUSE_COMPOUND_OPS)
+			se->conn.capable_ext |= FUSE_CAP_COMPOUND_OPS;
 	} else {
 		se->conn.max_readahead = 0;
 	}
@@ -2635,6 +2712,7 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	LL_SET_DEFAULT(se->op.readdirplus && se->op.readdir,
 		       FUSE_CAP_READDIRPLUS_AUTO);
 	LL_SET_DEFAULT(1, FUSE_CAP_OVER_IO_URING);
+	LL_SET_DEFAULT(se->op.compound, FUSE_CAP_COMPOUND_OPS);
 
 	/* This could safely become default, but libfuse needs an API extension
 	 * to support it
@@ -2759,7 +2837,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		outargflags |= FUSE_NO_EXPORT_SUPPORT;
 	if (se->conn.want_ext & FUSE_CAP_OVER_IO_URING)
 		outargflags |= FUSE_OVER_IO_URING;
-
+	if (se->conn.want_ext & FUSE_CAP_COMPOUND_OPS)
+		outargflags |= FUSE_COMPOUND_OPS;
 	if (se->conn.want_ext & FUSE_CAP_INVAL_INODE_ENTRY)
 		outargflags |= FUSE_INVAL_INODE_ENTRY;
 	if (se->conn.want_ext & FUSE_CAP_EXPIRE_INODE_ENTRY)
@@ -2805,6 +2884,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		if (se->conn.want_ext & FUSE_CAP_PASSTHROUGH)
 			fuse_log(FUSE_LOG_DEBUG, "   max_stack_depth=%u\n",
 				outarg.max_stack_depth);
+		if (se->conn.want_ext & FUSE_CAP_COMPOUND_OPS)
+			fuse_log(FUSE_LOG_DEBUG, "   compound_ops enabled\n");
 	}
 	if (arg->minor < 5)
 		outargsize = FUSE_COMPAT_INIT_OUT_SIZE;
@@ -3254,6 +3335,7 @@ static struct {
 	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]	   = { do_lseek,       "LSEEK"	     },
+	[FUSE_COMPOUND]	   = { do_compound,    "COMPOUND"    },
 	[FUSE_DLM_WB_LOCK] = { do_dlm_lock,	"DLM_WB_LOCK" },
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
@@ -3309,6 +3391,7 @@ static struct {
 	[FUSE_RENAME2]		= { _do_rename2,	"RENAME2" },
 	[FUSE_COPY_FILE_RANGE]	= { _do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]		= { _do_lseek,		"LSEEK" },
+	[FUSE_COMPOUND]		= { _do_compound,	"COMPOUND" },
 	[FUSE_DLM_WB_LOCK]	= { _do_dlm_lock,	"DLM_WB_LOCK" },
 	[CUSE_INIT]		= { _cuse_lowlevel_init, "CUSE_INIT" },
 };

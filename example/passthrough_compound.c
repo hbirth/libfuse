@@ -1,6 +1,5 @@
 /*
   FUSE: Filesystem in Userspace
-  Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
 
   This program can be distributed under the terms of the GNU GPLv2.
   See the file COPYING.
@@ -34,6 +33,7 @@
  * \include passthrough_ll.c
  */
 
+#include "fuse_log.h"
 #define _GNU_SOURCE
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
 
@@ -183,6 +183,17 @@ static void lo_init(void *userdata,
 		if (lo->debug && has_flag)
 			fuse_log(FUSE_LOG_DEBUG,
 				 "lo_init: activating flock locks\n");
+	}
+
+	/* Enable compound operations if supported by kernel */
+	if (conn->capable & FUSE_CAP_COMPOUND_OPS) {
+		has_flag = fuse_set_feature_flag(conn, FUSE_CAP_COMPOUND_OPS);
+		if (has_flag)
+			fuse_log(FUSE_LOG_INFO,
+				 "lo_init: activating compound operations\n");
+		else
+			fuse_log(FUSE_LOG_WARNING,
+				 "lo_init: compound operations not supported by kernel\n");
 	}
 
 	/* Disable the receiving and processing of FUSE_INTERRUPT requests */
@@ -900,7 +911,7 @@ static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 		fi->flags &= ~O_APPEND;
 
 	sprintf(buf, "/proc/self/fd/%i", lo_fd(req, ino));
-	fd = open(buf, fi->flags & ~O_NOFOLLOW);
+	fd = open(buf, fi->flags);
 	if (fd == -1)
 		return (void) fuse_reply_err(req, errno);
 
@@ -1228,6 +1239,506 @@ static void lo_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
 }
 
 
+/* Helper functions for compound operations */
+static unsigned long calc_timeout_sec(double t)
+{
+	if (t > (double) ULONG_MAX)
+		return ULONG_MAX;
+	else if (t < 0.0)
+		return 0;
+	else
+		return (unsigned long) t;
+}
+
+static unsigned int calc_timeout_nsec(double t)
+{
+	double f = t - (double) calc_timeout_sec(t);
+	if (f < 0.0)
+		return 0;
+	else if (f >= 0.999999999)
+		return 999999999;
+	else
+		return (unsigned int) (f * 1.0e9);
+}
+
+static void convert_stat(const struct stat *stbuf, struct fuse_attr *attr)
+{
+	attr->ino	= stbuf->st_ino;
+	attr->mode	= stbuf->st_mode;
+	attr->nlink	= stbuf->st_nlink;
+	attr->uid	= stbuf->st_uid;
+	attr->gid	= stbuf->st_gid;
+	attr->rdev	= stbuf->st_rdev;
+	attr->size	= stbuf->st_size;
+	attr->blksize	= stbuf->st_blksize;
+	attr->blocks	= stbuf->st_blocks;
+	attr->atime	= stbuf->st_atime;
+	attr->mtime	= stbuf->st_mtime;
+	attr->ctime	= stbuf->st_ctime;
+#ifdef HAVE_STRUCT_STAT_ST_ATIM
+	attr->atimensec = stbuf->st_atim.tv_nsec;
+	attr->mtimensec = stbuf->st_mtim.tv_nsec;
+	attr->ctimensec = stbuf->st_ctim.tv_nsec;
+#else
+	attr->atimensec = 0;
+	attr->mtimensec = 0;
+	attr->ctimensec = 0;
+#endif
+}
+
+static void lo_compound(fuse_req_t req, const void *arg)
+{
+	const struct fuse_compound_in *compound_in = (const struct fuse_compound_in *)arg;
+	char *result_buffer = NULL;
+	size_t result_buffer_size = 0;
+	const char *payload;
+	size_t payload_offset;
+	uint32_t i;
+	int err = 0;
+
+	/* Basic validation */
+	if (!compound_in) {
+		fuse_log(FUSE_LOG_ERR, "compound: null compound_in pointer\n");
+		fuse_reply_err(req, EINVAL);
+		return;
+	}
+
+	fuse_log(FUSE_LOG_DEBUG, "compound: processing %u operations, flags=0x%x\n",
+		compound_in->count, compound_in->flags);
+
+	if (compound_in->count == 0 || compound_in->count > FUSE_MAX_COMPOUND_OPS) {
+		fuse_log(FUSE_LOG_ERR, "compound: invalid operation count %u\n", compound_in->count);
+		fuse_reply_err(req, EINVAL);
+		return;
+	}
+
+	/* Start parsing payload after the compound header */
+	payload = (const char *)arg + sizeof(struct fuse_compound_in);
+	payload_offset = 0;
+
+	/* Process each operation in the compound request */
+	for (i = 0; i < compound_in->count; i++) {
+		const struct fuse_in_header *op_hdr;
+		const void *op_data;
+		size_t op_size;
+		size_t result_size;
+		struct fuse_compound_result *current_result;
+
+		/* Parse operation header */
+		op_hdr = (const struct fuse_in_header *)(payload + payload_offset);
+
+		if (op_hdr->len < sizeof(struct fuse_in_header)) {
+			fuse_log(FUSE_LOG_ERR, "compound: invalid operation length %u\n", op_hdr->len);
+			err = EINVAL;
+			break;
+		}
+
+		fuse_log(FUSE_LOG_DEBUG, "compound: processing operation %u: opcode=%u, len=%u, nodeid=%" PRIu64 "\n",
+			i, op_hdr->opcode, op_hdr->len, op_hdr->nodeid);
+
+		payload_offset += sizeof(struct fuse_in_header);
+
+		/* Calculate operation data size */
+		op_size = op_hdr->len - sizeof(struct fuse_in_header);
+		op_data = payload + payload_offset;
+
+		if (lo_debug(req))
+			fuse_log(FUSE_LOG_DEBUG, "compound: operation %u data_size=%zu, payload_offset=%zu\n",
+				i, op_size, payload_offset);
+
+		/* Determine result size based on operation type */
+		switch (op_hdr->opcode) {
+		case FUSE_GETATTR:
+			result_size = sizeof(struct fuse_compound_result) + sizeof(struct fuse_attr_out);
+			break;
+		case FUSE_OPEN:
+		case FUSE_OPENDIR:
+			result_size = sizeof(struct fuse_compound_result) + sizeof(struct fuse_open_out);
+			break;
+		default:
+			fuse_log(FUSE_LOG_ERR, "compound: unsupported operation %u\n", op_hdr->opcode);
+			err = ENOSYS;
+			goto cleanup;
+		}
+
+		/* Allocate space for this result */
+		char *new_buffer = realloc(result_buffer, result_buffer_size + result_size);
+		if (!new_buffer) {
+			fuse_log(FUSE_LOG_ERR, "compound: failed to allocate memory for result %u\n", i);
+			err = ENOMEM;
+			goto cleanup;
+		}
+		result_buffer = new_buffer;
+
+		/* Get pointer to current result */
+		current_result = (struct fuse_compound_result *)(result_buffer + result_buffer_size);
+		memset(current_result, 0, result_size);
+
+		/* Initialize result header */
+		current_result->hdr.len = sizeof(struct fuse_out_header);
+		current_result->hdr.error = 0;
+		current_result->hdr.unique = op_hdr->unique;
+
+		/* Process the operation */
+		switch (op_hdr->opcode) {
+		case FUSE_GETATTR: {
+			/* Validate GETATTR operation data size */
+			if (op_size != sizeof(struct fuse_getattr_in)) {
+				fuse_log(FUSE_LOG_ERR, "compound: GETATTR expects %zu bytes, got %zu bytes\n",
+					sizeof(struct fuse_getattr_in), op_size);
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+			current_result->hdr.error = 0;
+
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound: allocated %zu bytes for GETATTR result (total: %zu)\n",
+					result_size, result_buffer_size + result_size);
+
+			const struct fuse_getattr_in *getattr_in = (const struct fuse_getattr_in *)op_data;
+			struct lo_data *lo = lo_data(req);
+			struct stat buf;
+			int fd;
+			int res;
+
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound lo_getattr(ino=%" PRIu64 ", flags=0x%x, fh=%" PRIu64 ")\n",
+					op_hdr->nodeid, getattr_in->getattr_flags, getattr_in->fh);
+
+			if (op_hdr->nodeid == 0) {
+				fuse_log(FUSE_LOG_ERR, "compound: invalid nodeid 0 for GETATTR\n");
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			fd = lo_fd(req, op_hdr->nodeid);
+			if (fd < 0) {
+				fuse_log(FUSE_LOG_ERR, "compound: failed to get fd for nodeid %" PRIu64 "\n", op_hdr->nodeid);
+				current_result->hdr.error = -EBADF;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			res = fstatat(fd, "", &buf, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+			if (res == -1) {
+				current_result->hdr.error = -errno;
+				/* Set response length even for errors - just the header */
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				if (lo_debug(req))
+					fuse_log(FUSE_LOG_DEBUG, "compound GETATTR failed: errno=%d\n", errno);
+			} else {
+				/* Populate the fuse_attr_out response data */
+				struct fuse_attr_out *attr_out = (struct fuse_attr_out *)((char *)current_result + sizeof(struct fuse_compound_result));
+
+				memset(attr_out, 0, sizeof(*attr_out));
+				attr_out->attr_valid = calc_timeout_sec(lo->timeout);
+				attr_out->attr_valid_nsec = calc_timeout_nsec(lo->timeout);
+				convert_stat(&buf, &attr_out->attr);
+
+				/* Set the total response length: header + fuse_attr_out */
+				current_result->hdr.len = sizeof(struct fuse_out_header) + sizeof(struct fuse_attr_out);
+
+				if (lo_debug(req)) {
+					fuse_log(FUSE_LOG_DEBUG, "compound GETATTR success: ino=%" PRIu64 ", mode=0%o, size=%ld, "
+						"attr_valid=%ld.%09ld, response_len=%u\n",
+						attr_out->attr.ino, attr_out->attr.mode, attr_out->attr.size,
+						attr_out->attr_valid, attr_out->attr_valid_nsec, current_result->hdr.len);
+				}
+			}
+
+			/* Update result buffer size */
+			result_buffer_size += result_size;
+			break;
+		}
+		case FUSE_OPEN: {
+			/* Validate OPEN operation data size */
+			if (op_size != sizeof(struct fuse_open_in)) {
+				fuse_log(FUSE_LOG_ERR, "compound: OPEN expects %zu bytes, got %zu bytes\n",
+					sizeof(struct fuse_open_in), op_size);
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound: processing OPEN operation %u\n", i);
+
+			/* implementation for compound FUSE_OPEN following lo_open logic */
+			const struct fuse_open_in *open_in = (const struct fuse_open_in *)op_data;
+			struct lo_data *lo = lo_data(req);
+			int fd;
+			uint32_t flags = open_in->flags;
+			int inode_fd;
+
+			if (op_hdr->nodeid == 0) {
+				fuse_log(FUSE_LOG_ERR, "compound: invalid nodeid 0 for OPEN\n");
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			fuse_log(FUSE_LOG_INFO, "compound lo_open(ino=%" PRIu64 ", flags=0x%x)\n",
+				op_hdr->nodeid, flags);
+
+			/* With writeback cache, kernel may send read requests even
+			   when userspace opened write-only */
+			if (lo->writeback && (flags & O_ACCMODE) == O_WRONLY) {
+				flags &= ~O_ACCMODE;
+				flags |= O_RDWR;
+			}
+
+			if (lo->writeback && (flags & O_APPEND))
+				flags &= ~O_APPEND;
+
+			/* When opening via /proc/self/fd/, the inode already exists,
+			 * so O_CREAT and O_EXCL don't make sense and can cause issues */
+			flags &= ~(O_CREAT | O_EXCL);
+
+			/* Get the inode's file descriptor and open via /proc/self/fd/ */
+			inode_fd = lo_fd(req, op_hdr->nodeid);
+			char procpath[64];
+			sprintf(procpath, "/proc/self/fd/%i", inode_fd);
+			fd = open(procpath, flags);
+			if (fd == -1) {
+				current_result->hdr.error = -errno;
+				/* Set response length even for errors - just the header */
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				if (lo_debug(req))
+					fuse_log(FUSE_LOG_DEBUG, "compound OPEN failed: errno=%d, ino=%" PRIu64 "\n", errno, op_hdr->nodeid);
+			} else {
+				/* Create a fuse_file_info structure like lo_open does */
+				struct fuse_file_info fi;
+				memset(&fi, 0, sizeof(fi));
+				fi.flags = flags;
+				fi.fh = fd;
+
+				/* Apply the same logic as lo_open */
+				if (lo->cache == CACHE_NEVER)
+					fi.direct_io = 1;
+				else if (lo->cache == CACHE_ALWAYS)
+					fi.keep_cache = 1;
+
+				/* Enable direct_io when open has flags O_DIRECT */
+				if (fi.flags & O_DIRECT)
+					fi.direct_io = 1;
+
+				/* parallel_direct_writes feature */
+				fi.parallel_direct_writes = 1;
+
+				if (lo_debug(req)) {
+					fuse_log(FUSE_LOG_DEBUG, "compound OPEN fi: fh=%d, direct_io=%d, keep_cache=%d, "
+						"parallel_direct_writes=%d\n",
+						fd, fi.direct_io, fi.keep_cache, fi.parallel_direct_writes);
+				}
+
+				/* Populate the fuse_open_out response data using fill_open logic */
+				struct fuse_open_out *open_out = (struct fuse_open_out *)((char *)current_result + sizeof(struct fuse_compound_result));
+				memset(open_out, 0, sizeof(*open_out));
+
+				/* Use the same logic as fill_open() from lib/fuse_lowlevel.c */
+				open_out->fh = fi.fh;
+				if (fi.backing_id > 0) {
+					open_out->backing_id = fi.backing_id;
+					open_out->open_flags |= FOPEN_PASSTHROUGH;
+				}
+				if (fi.direct_io)
+					open_out->open_flags |= FOPEN_DIRECT_IO;
+				if (fi.keep_cache)
+					open_out->open_flags |= FOPEN_KEEP_CACHE;
+				if (fi.cache_readdir)
+					open_out->open_flags |= FOPEN_CACHE_DIR;
+				if (fi.nonseekable)
+					open_out->open_flags |= FOPEN_NONSEEKABLE;
+				if (fi.noflush)
+					open_out->open_flags |= FOPEN_NOFLUSH;
+				if (fi.parallel_direct_writes)
+					open_out->open_flags |= FOPEN_PARALLEL_DIRECT_WRITES;
+
+				/* Set the total response length: header + fuse_open_out */
+				current_result->hdr.len = sizeof(struct fuse_out_header) + sizeof(struct fuse_open_out);
+
+				if (lo_debug(req)) {
+					fuse_log(FUSE_LOG_DEBUG, "compound OPEN success: fh=%d, open_flags=0x%x, "
+						"backing_id=%d, response_len=%u\n",
+						fd, open_out->open_flags, open_out->backing_id, current_result->hdr.len);
+				}
+			}
+
+			/* Update result buffer size */
+			result_buffer_size += result_size;
+			break;
+		}
+		case FUSE_OPENDIR: {
+			/* Validate OPENDIR operation data size */
+			if (op_size != sizeof(struct fuse_open_in)) {
+				fuse_log(FUSE_LOG_ERR, "compound: OPENDIR expects %zu bytes, got %zu bytes\n",
+					sizeof(struct fuse_open_in), op_size);
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound: processing OPENDIR operation %u\n", i);
+
+			struct lo_data *lo = lo_data(req);
+			struct lo_dirp *d = NULL;
+			int fd = -1;
+			int error = ENOMEM;
+
+			if (op_hdr->nodeid == 0) {
+				fuse_log(FUSE_LOG_ERR, "compound: invalid nodeid 0 for OPENDIR\n");
+				current_result->hdr.error = -EINVAL;
+				current_result->hdr.len = sizeof(struct fuse_out_header);
+				result_buffer_size += result_size;
+				break;
+			}
+
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound lo_opendir(ino=%" PRIu64 ")\n",
+					op_hdr->nodeid);
+
+			/* Allocate directory state structure */
+			d = calloc(1, sizeof(struct lo_dirp));
+			if (d == NULL)
+				goto out_err;
+
+			/* Open the directory */
+			fd = openat(lo_fd(req, op_hdr->nodeid), ".", O_RDONLY);
+			if (fd == -1)
+				goto out_errno;
+
+			/* Convert fd to DIR* for directory operations */
+			d->dp = fdopendir(fd);
+			if (d->dp == NULL)
+				goto out_errno;
+
+			/* Initialize directory state */
+			d->offset = 0;
+			d->entry = NULL;
+
+			/* Create a fuse_file_info structure like lo_opendir does */
+			struct fuse_file_info fi;
+			memset(&fi, 0, sizeof(fi));
+			fi.fh = (uintptr_t)d;
+			if (lo->cache != CACHE_NEVER)
+				fi.cache_readdir = 1;
+			if (lo->cache == CACHE_ALWAYS)
+				fi.keep_cache = 1;
+
+			if (lo_debug(req)) {
+				fuse_log(FUSE_LOG_DEBUG, "compound OPENDIR fi: fh=%" PRIuPTR ", cache_readdir=%d, keep_cache=%d\n",
+					(uintptr_t)d, fi.cache_readdir, fi.keep_cache);
+			}
+
+			/* Populate the fuse_open_out response data using fill_open logic */
+			struct fuse_open_out *open_out = (struct fuse_open_out *)((char *)current_result + sizeof(struct fuse_compound_result));
+			memset(open_out, 0, sizeof(*open_out));
+
+			/* Use the same logic as fill_open() from lib/fuse_lowlevel.c */
+			open_out->fh = fi.fh;
+			if (fi.backing_id > 0) {
+				open_out->backing_id = fi.backing_id;
+				open_out->open_flags |= FOPEN_PASSTHROUGH;
+			}
+			if (fi.direct_io)
+				open_out->open_flags |= FOPEN_DIRECT_IO;
+			if (fi.keep_cache)
+				open_out->open_flags |= FOPEN_KEEP_CACHE;
+			if (fi.cache_readdir)
+				open_out->open_flags |= FOPEN_CACHE_DIR;
+			if (fi.nonseekable)
+				open_out->open_flags |= FOPEN_NONSEEKABLE;
+			if (fi.noflush)
+				open_out->open_flags |= FOPEN_NOFLUSH;
+			if (fi.parallel_direct_writes)
+				open_out->open_flags |= FOPEN_PARALLEL_DIRECT_WRITES;
+
+			/* Set the total response length: header + fuse_open_out */
+			current_result->hdr.len = sizeof(struct fuse_out_header) + sizeof(struct fuse_open_out);
+
+			if (lo_debug(req)) {
+				fuse_log(FUSE_LOG_DEBUG, "compound OPENDIR success: fh=%" PRIuPTR ", open_flags=0x%x, "
+					"backing_id=%d, response_len=%u\n",
+					(uintptr_t)d, open_out->open_flags, open_out->backing_id, current_result->hdr.len);
+			}
+
+			/* Update result buffer size */
+			result_buffer_size += result_size;
+			break;
+
+		out_errno:
+			error = errno;
+		out_err:
+			if (d) {
+				if (fd != -1)
+					close(fd);
+				free(d);
+			}
+			current_result->hdr.error = -error;
+			/* Set response length even for errors - just the header */
+			current_result->hdr.len = sizeof(struct fuse_out_header);
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound OPENDIR failed: errno=%d\n", error);
+			/* Update result buffer size even on error */
+			result_buffer_size += result_size;
+			break;
+		}
+		}
+
+		/* Move to next operation */
+		payload_offset += op_size;
+
+		/* If atomic flag is set and we hit an error, stop processing */
+		if ((compound_in->flags & FUSE_COMPOUND_ATOMIC) && current_result->hdr.error) {
+			err = current_result->hdr.error;
+			if (lo_debug(req))
+				fuse_log(FUSE_LOG_DEBUG, "compound: atomic operation failed, stopping at operation %u with error %d\n",
+					i, current_result->hdr.error);
+			break;
+		}
+
+		if (lo_debug(req))
+			fuse_log(FUSE_LOG_DEBUG, "compound: completed operation %u, result_len=%u, error=%d\n",
+				i, current_result->hdr.len, current_result->hdr.error);
+	}
+
+cleanup:
+	if (lo_debug(req))
+		fuse_log(FUSE_LOG_DEBUG, "compound: processed %u operations, total_buffer_size=%zu, final_err=%d\n",
+			i, result_buffer_size, err);
+
+	/* Send compound reply */
+	if (err) {
+		if (lo_debug(req))
+			fuse_log(FUSE_LOG_DEBUG, "compound: sending error reply, err=%d\n", err);
+		free(result_buffer);
+		/* err can be positive (EINVAL, ENOSYS) or negative (-EINVAL from hdr.error) */
+		fuse_reply_err(req, err > 0 ? err : -err);
+	} else {
+		/* The result_buffer already contains all results in contiguous format */
+		uint32_t processed_count = i;  /* Number of operations actually processed */
+
+		if (lo_debug(req))
+			fuse_log(FUSE_LOG_DEBUG, "compound: sending success reply, processed_count=%u, buffer_size=%zu\n",
+				processed_count, result_buffer_size);
+
+		/* Send the compound reply using the existing buffer */
+		struct fuse_compound_result *reply_results = (struct fuse_compound_result *)result_buffer;
+		fuse_reply_compound(req, processed_count, reply_results);
+
+		/* Cleanup */
+		free(result_buffer);
+	}
+}
 
 static const struct fuse_lowlevel_ops lo_oper = {
 	.init		= lo_init,
@@ -1269,6 +1780,7 @@ static const struct fuse_lowlevel_ops lo_oper = {
 	.copy_file_range = lo_copy_file_range,
 #endif
 	.lseek		= lo_lseek,
+	.compound	= lo_compound,
 };
 
 int main(int argc, char *argv[])

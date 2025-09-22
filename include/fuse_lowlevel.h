@@ -23,6 +23,7 @@
 #endif
 
 #include "fuse_common.h"
+#include "fuse_kernel.h"
 
 #include <stddef.h>
 #include <utime.h>
@@ -148,6 +149,22 @@ struct fuse_custom_io {
 enum fuse_notify_entry_flags {
 	FUSE_LL_INVALIDATE = 0,
 	FUSE_LL_EXPIRE_ONLY	= (1 << 0),
+};
+
+/**
+ * Simplified compound operation structures
+ *
+ * Note: The compound implementation now passes raw payload data directly
+ * to the filesystem implementation, eliminating complex parsing in libfuse.
+ */
+struct fuse_compound_op {
+	struct fuse_in_header hdr;
+	/* followed by operation-specific data */
+};
+
+struct fuse_compound_result {
+	struct fuse_out_header hdr;
+	/* followed by operation-specific data */
 };
 
 /* 'to_set' flags in setattr */
@@ -1377,6 +1394,16 @@ struct fuse_lowlevel_ops {
 	 */
 	void (*dlm_lock) (fuse_req_t req, fuse_ino_t ino, uint64_t start, uint64_t end,
 			uint32_t type, struct fuse_file_info *fi);
+
+	/**
+	 * Process a compound request containing multiple operations
+	 *
+	 * The filesystem implementation must parse the raw payload data to
+	 *
+	 * @param req request handle
+	 * @param flags compound operation flags (FUSE_COMPOUND_*)
+	 */
+	void (*compound) (fuse_req_t req, const void* arg);
 };
 
 /**
@@ -1649,6 +1676,20 @@ int fuse_reply_dlm_lock(fuse_req_t req, uint64_t start, uint64_t end);
  * @return zero for success, -errno for failure to send reply
  */
 int fuse_reply_bmap(fuse_req_t req, uint64_t idx);
+
+/**
+ * Reply with compound operation results
+ *
+ * Possible requests:
+ *   compound
+ *
+ * @param req request handle
+ * @param count number of results
+ * @param results array of compound results
+ * @return zero for success, -errno for failure to send reply
+ */
+int fuse_reply_compound(fuse_req_t req, uint32_t count,
+			const struct fuse_compound_result *results);
 
 /* ----------------------------------------------------------- *
  * Filling a buffer in readdir				       *

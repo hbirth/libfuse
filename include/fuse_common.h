@@ -516,10 +516,21 @@ struct fuse_loop_config_v1 {
  */
 #define FUSE_CAP_NO_EXPORT_SUPPORT (1 << 30)
 
-	/**
-	 * Indicates support for io-uring between fuse-server and fuse-client
-	 */
+/**
+ * Indicates support for io-uring between fuse-server and fuse-client
+ */
 #define FUSE_CAP_OVER_IO_URING (1ULL << 31)
+
+/**
+ * Indicates support for compound operations.
+ *
+ * If this flag is set in the `capable` field of the `fuse_conn_info`
+ * structure, then the FUSE kernel module supports compound operations
+ * that batch multiple FUSE operations into a single request.
+ *
+ * This feature is disabled by default.
+ */
+#define FUSE_CAP_COMPOUND_OPS (1ULL << 55)
 
 /**
  * invalidate inode aliases when doing inode invalidation
