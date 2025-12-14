@@ -556,6 +556,7 @@ static struct fuse_ring_pool *fuse_create_ring(struct fuse_session *se)
 		queue->numa_node = numa_node_of_cpu(qid);
 		queue->qid = qid;
 		queue->ring_pool = fuse_ring;
+		queue->eventfd = -1;
 	}
 
 	for (size_t qid = 0; qid < nr_queues; qid++) {
