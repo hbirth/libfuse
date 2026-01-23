@@ -3074,7 +3074,7 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		outargflags |= FUSE_URING_REDUCED_Q;
 	}
 
-
+	outarg.max_inodes = se->conn.max_inodes;
 	outarg.max_readahead = se->conn.max_readahead;
 	outarg.max_write = se->conn.max_write;
 	if (se->conn.proto_minor >= 13) {
@@ -3105,6 +3105,9 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 			outarg.congestion_threshold);
 		fuse_log(FUSE_LOG_DEBUG, "   time_gran=%u\n",
 			outarg.time_gran);
+		if (outarg.max_inodes)
+			fuse_log(FUSE_LOG_DEBUG, "   max_inodes=%u\n",
+				outarg.max_inodes);
 		if (se->conn.want_ext & FUSE_CAP_PASSTHROUGH)
 			fuse_log(FUSE_LOG_DEBUG, "   max_stack_depth=%u\n",
 				outarg.max_stack_depth);

@@ -733,9 +733,20 @@ struct fuse_conn_info {
 	uint8_t padding_uint8_to_64[7];
 
 	/**
+	 * Maximum number of inodes that the kernel should hold cached.
+	 *
+	 * If set to a non-zero value, the kernel will limit the number of
+	 * cached inodes to this value. When the limit is reached, the kernel
+	 * will prune the least recently used inodes.
+	 *
+	 * A value of 0 means no limit (default).
+	 */
+	uint32_t max_inodes;
+
+	/**
 	 * For future use.
 	 */
-	uint32_t reserved[14];
+	uint32_t reserved[13];
 };
 fuse_static_assert(sizeof(struct fuse_conn_info) == 128,
 		   "Size of struct fuse_conn_info must be 128 bytes");
