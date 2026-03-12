@@ -2499,6 +2499,19 @@ int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf);
 void fuse_session_want_sync_init(struct fuse_session *se);
 
 /**
+ * Enable debug output
+ *
+ * This allows to enable debug output without a command line parameter and
+ * without the enforcement of the command line parameter to run in foreground.
+ * The daemon needs to handle either fuse_log output via stderr, or
+ * redirection to its own logs or via syslog.
+ *
+ * @param se the session
+ */
+void fuse_session_set_debug(struct fuse_session *se);
+
+
+/**
  * Set a custom allocator for the payload of io-uring requests
  *
  * This allocator is used to allocate the payload of io-uring requests.
