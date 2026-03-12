@@ -133,6 +133,9 @@ struct fuse_session {
 
 	_Atomic bool buf_reallocable;
 
+	/* synchronous FUSE_INIT support */
+	bool want_sync_init;
+
 	/* io_uring */
 	struct fuse_session_uring uring;
 
