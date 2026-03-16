@@ -16,6 +16,7 @@
 #include "fuse_misc.h"
 #include "fuse_opt.h"
 #include "mount_util.h"
+#include "mount_i_linux.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +51,6 @@
 #define FUSERMOUNT_PROG		"fusermount3"
 #define FUSE_COMMFD_ENV		"_FUSE_COMMFD"
 #define FUSE_COMMFD2_ENV	"_FUSE_COMMFD2"
-#define FUSE_KERN_DEVICE_ENV	"FUSE_KERN_DEVICE"
 
 #ifndef MS_DIRSYNC
 #define MS_DIRSYNC 128
@@ -64,20 +64,6 @@ enum {
 	KEY_MTAB_OPT,
 	KEY_ALLOW_OTHER,
 	KEY_RO,
-};
-
-struct mount_opts {
-	int allow_other;
-	int flags;
-	int auto_unmount;
-	int blkdev;
-	char *fsname;
-	char *subtype;
-	char *subtype_opt;
-	char *mtab_opts;
-	char *fusermount_opts;
-	char *kernel_opts;
-	unsigned max_read;
 };
 
 #define FUSE_MOUNT_OPT(t, p) { t, offsetof(struct mount_opts, p), 1 }
@@ -512,7 +498,7 @@ static int fuse_kern_mount_prepare(const char *mnt,
 				   struct mount_opts *mo)
 {
 	char tmp[128];
-	const char *devname = getenv(FUSE_KERN_DEVICE_ENV) ?: "/dev/fuse";
+	const char *devname = fuse_mnt_get_devname();
 	struct stat stbuf;
 	int fd;
 	int res;
@@ -565,52 +551,28 @@ out_close:
  * @mo: mount options
  * @mnt_opts: mount options to pass to the kernel
  *
- * Returns: 0 on success, -1 on failure, FUSE_MOUNT_FALLBACK_NEEDED if fusermount should be used
+ * Returns: 0 on success, -1 on failure,
+ *          FUSE_MOUNT_FALLBACK_NEEDED if fusermount should be used
  */
 static int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 				  const char *mnt_opts)
 {
-	const char *devname = getenv(FUSE_KERN_DEVICE_ENV) ?: "/dev/fuse";
 	char *source = NULL;
 	char *type = NULL;
-	const char *type_selection = NULL;
-	size_t typelen;
 	int res;
 
 	res = -ENOMEM;
-	source = malloc((mo->fsname ? strlen(mo->fsname) : 0) +
-			(mo->subtype ? strlen(mo->subtype) : 0) +
-			strlen(devname) + 32);
-
-	if (mo->blkdev)
-		type_selection = "redfsblk";
-	else {
-		if (strcmp(devname, "/dev/redfs") == 0)
-			type_selection = "redfs";
-		else
-			type_selection = "fuse";
-	}
-
-	typelen = MAX(strlen(type_selection) + 1, 32);
-
-	type = malloc((mo->subtype ? strlen(mo->subtype) : 0) + typelen);
+	source = fuse_mnt_build_source(mo);
+	type = fuse_mnt_build_type(mo);
 	if (!type || !source) {
 		fuse_log(FUSE_LOG_ERR, "redfs: failed to allocate type memory\n");
 		goto out_close;
 	}
 
-	strncpy(type, type_selection, typelen);
-	if (mo->subtype) {
-		strcat(type, ".");
-		strcat(type, mo->subtype);
-	}
-	strcpy(source,
-	       mo->fsname ? mo->fsname : (mo->subtype ? mo->subtype : devname));
-
 	res = mount(source, mnt, type, mo->flags, mo->kernel_opts);
 	if (res == -1 && errno == ENODEV && mo->subtype) {
 		/* Probably missing subtype support */
-		strncpy(type, type_selection, typelen);
+		strcpy(type, mo->blkdev ? "fuseblk" : "fuse");
 		if (mo->fsname) {
 			if (!mo->blkdev)
 				sprintf(source, "%s#%s", mo->subtype,
@@ -642,20 +604,10 @@ static int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 		goto out_close;
 	}
 
-#ifndef IGNORE_MTAB
-	if (geteuid() == 0) {
-		char *newmnt = fuse_mnt_resolve_path("redfs", mnt);
-		res = -1;
-		if (!newmnt)
-			goto out_umount;
+	res = fuse_mnt_add_mount_helper(mnt, source, type, mnt_opts);
+	if (res == -1)
+		goto out_umount;
 
-		res = fuse_mnt_add_mount("redfs", source, newmnt, type,
-					 mnt_opts);
-		free(newmnt);
-		if (res == -1)
-			goto out_umount;
-	}
-#endif /* IGNORE_MTAB */
 	free(type);
 	free(source);
 
@@ -791,4 +743,38 @@ int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo)
 out:
 	free(mnt_opts);
 	return res;
+}
+
+char *fuse_mnt_build_source(const struct mount_opts *mo)
+{
+	const char *devname = fuse_mnt_get_devname();
+	char *source;
+
+	source = malloc((mo->fsname ? strlen(mo->fsname) : 0) +
+			(mo->subtype ? strlen(mo->subtype) : 0) +
+			strlen(devname) + 32);
+	if (!source)
+		return NULL;
+
+	strcpy(source,
+	       mo->fsname ? mo->fsname : (mo->subtype ? mo->subtype : devname));
+
+	return source;
+}
+
+char *fuse_mnt_build_type(const struct mount_opts *mo)
+{
+	char *type;
+
+	type = malloc((mo->subtype ? strlen(mo->subtype) : 0) + 32);
+	if (!type)
+		return NULL;
+
+	strcpy(type, mo->blkdev ? "fuseblk" : "fuse");
+	if (mo->subtype) {
+		strcat(type, ".");
+		strcat(type, mo->subtype);
+	}
+
+	return type;
 }
