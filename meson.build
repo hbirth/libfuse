@@ -30,7 +30,7 @@ if platform == 'darwin'
         'https://www.fuse-t.org/ instead')
 elif platform == 'cygwin' or platform == 'windows'
   error('libfuse does not support Windows.\n' +
-        'Take a look at http://www.secfs.net/winfsp/ instead')       
+        'Take a look at http://www.secfs.net/winfsp/ instead')
 endif
 
 cc = meson.get_compiler('c')
@@ -77,10 +77,82 @@ foreach func : test_funcs
     private_cfg.set('HAVE_' + func.to_upper(),
         cc.has_function(func, prefix: include_default, args: args_default))
 endforeach
-private_cfg.set('HAVE_SETXATTR', 
-        cc.has_function('setxattr', prefix: '#include <sys/xattr.h>'))
-private_cfg.set('HAVE_ICONV', 
-        cc.has_function('iconv', prefix: '#include <iconv.h>'))
+
+# Special case checks that need custom code
+special_funcs = {
+    'pthread_setname_np': '''
+        #include <pthread.h>
+        int main(void) {
+            pthread_t thread = pthread_self();
+            pthread_setname_np(thread, "test");
+            return 0;
+        }
+    ''',
+    'close_range': '''
+        #include <unistd.h>
+        #include <fcntl.h>
+        #ifdef linux
+        #include <linux/close_range.h>
+        #endif
+        int main(void) {
+            unsigned int flags = CLOSE_RANGE_UNSHARE;
+            return close_range(3, ~0U, flags);
+        }
+    ''',
+    'listmount': '''
+	#include <syscall.h>
+	#include <linux/mount.h>
+	#include <unistd.h>
+	#include <stdint.h>
+
+	int main(int argc, char *argv[]) {
+	  struct mnt_id_req req = {
+	    .size = sizeof(struct mnt_id_req),
+		  .mnt_id = LSMT_ROOT,
+	  };
+	  uint64_t mnt_ids[1];
+
+	  int n = syscall(SYS_listmount, &req, &mnt_ids, 1, 0);
+	  if (n == -1) {
+	    return -1;
+	  }
+	}
+    ''',
+    'new_mount_api': '''
+	#define _GNU_SOURCE
+	#include <sys/mount.h>
+	#include <linux/mount.h>
+	#include <unistd.h>
+	#include <fcntl.h>
+
+	int main(void) {
+	    int fsfd = fsopen("fuse", FSOPEN_CLOEXEC);
+	    int res = fsconfig(fsfd, FSCONFIG_SET_STRING, "source", "test", 0);
+	    int mntfd = fsmount(fsfd, FSMOUNT_CLOEXEC, 0);
+	    res = move_mount(mntfd, "", AT_FDCWD, "/mnt", MOVE_MOUNT_F_EMPTY_PATH);
+	    return 0;
+	}
+    '''
+}
+
+foreach name, code : special_funcs
+    private_cfg.set('HAVE_' + name.to_upper(),
+        cc.links(code, args: args_default,
+                 name: name + ' check'))
+endforeach
+
+# Headers checks
+test_headers = [ 'sys/xattr.h', 'linux/limits.h' ]
+foreach header : test_headers
+    private_cfg.set('HAVE_' + header.underscorify().to_upper(),
+        cc.has_header(header))
+endforeach
+
+# Regular function checks
+private_cfg.set('HAVE_SETXATTR',
+    cc.has_function('setxattr', prefix: '#include <sys/xattr.h>'))
+private_cfg.set('HAVE_ICONV',
+    cc.has_function('iconv', prefix: '#include <iconv.h>'))
 private_cfg.set('HAVE_BACKTRACE',
         cc.has_function('backtrace', prefix: '#include <execinfo.h>'))
 private_cfg.set('HAVE_STATX',
@@ -239,7 +311,7 @@ configure_file(output: 'libfuse_config.h',
 include_dirs = include_directories('include', 'lib', '.')
 
 # Common dependencies
-thread_dep = dependency('threads') 
+thread_dep = dependency('threads')
 
 #
 # Read build files from sub-directories
