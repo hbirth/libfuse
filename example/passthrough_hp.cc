@@ -1643,6 +1643,13 @@ int main(int argc, char *argv[]) {
     if (!fs.foreground)
         fuse_log_enable_syslog("passthrough-hp", LOG_PID | LOG_CONS, LOG_DAEMON);
 
+    /* required here for sync init */
+    fuse_daemonize_early_success();
+
+    if (options.count("single"))
+	ret = fuse_session_loop(se);
+    else
+	ret = fuse_session_loop_mt(se, loop_config);
 
     teardown_watchog = fuse_session_start_teardown_watchdog(
         se, fs.root.stop_timeout_secs, NULL, NULL);

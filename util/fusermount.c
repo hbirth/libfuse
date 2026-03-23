@@ -1251,7 +1251,6 @@ struct mount_context {
 	char *mnt_opts;
 	char *x_opts;
 	char *kern_mnt_opts; /* mnt_opts with removed x_opts */
-	const char *type;
 };
 
 /*
@@ -1367,7 +1366,6 @@ static int mount_fuse_finish_fsmount(const char *mnt,
 
 	/* Store results in context */
 	ctx->source = mp.source;
-	ctx->type = mp.type;
 	ctx->mnt_opts = final_mnt_opts;
 	*type = mp.type;
 
