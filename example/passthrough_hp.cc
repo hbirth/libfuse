@@ -153,7 +153,8 @@ struct Fs {
     Inode root;
     double timeout;
     bool debug;
-    bool debug_fuse;
+    bool debug_fuse; // foreground fuse debug
+    bool bg_debug_fuse; // background fuse debug
     bool foreground;
     std::string source;
     size_t blocksize;
@@ -1450,13 +1451,13 @@ static std::string string_join(const std::vector<std::string>& elems, char delim
     return out.str();
 }
 
-
 static cxxopts::ParseResult parse_options(int argc, char **argv) {
     cxxopts::Options opt_parser(argv[0]);
     std::vector<std::string> mount_options;
     opt_parser.add_options()
         ("debug", "Enable filesystem debug messages")
         ("debug-fuse", "Enable libfuse debug messages")
+        ("bg-debug-fuse", "Enable libfuse debug messages in background")
         ("foreground", "Run in foreground")
         ("help", "Print help")
         ("nocache", "Disable attribute all caching")
@@ -1497,6 +1498,7 @@ static cxxopts::ParseResult parse_options(int argc, char **argv) {
 
     fs.debug = options.count("debug") != 0;
     fs.debug_fuse = options.count("debug-fuse") != 0;
+    fs.bg_debug_fuse = options.count("bg-debug-fuse") != 0;
 
     fs.foreground = options.count("foreground") != 0;
     if (fs.debug || fs.debug_fuse)
@@ -1631,6 +1633,12 @@ int main(int argc, char *argv[]) {
 
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
 
+    if (!fs.foreground)
+	fuse_log_enable_syslog("passthrough-hp", LOG_PID | LOG_CONS,
+			       LOG_DAEMON);
+    if (fs.bg_debug_fuse)
+	fuse_session_set_debug(se);
+
     /* Start daemonization before mount so parent can report mount failure */
     if (fs.foreground)
 	daemon_flags |= FUSE_DAEMONIZE_NO_BACKGROUND;
@@ -1643,19 +1651,13 @@ int main(int argc, char *argv[]) {
     if (!fs.foreground)
         fuse_log_enable_syslog("passthrough-hp", LOG_PID | LOG_CONS, LOG_DAEMON);
 
-    /* required here for sync init */
-    fuse_daemonize_early_success();
-
-    if (options.count("single"))
-	ret = fuse_session_loop(se);
-    else
-	ret = fuse_session_loop_mt(se, loop_config);
-
     teardown_watchog = fuse_session_start_teardown_watchdog(
-        se, fs.root.stop_timeout_secs, NULL, NULL);
-
+	se, fs.root.stop_timeout_secs, NULL, NULL);
     if (teardown_watchog == NULL)
 	goto err_out4;
+
+    /* required here for sync init */
+    fuse_daemonize_early_success();
 
     if (options.count("single"))
         ret = fuse_session_loop(se);
