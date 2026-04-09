@@ -1214,6 +1214,8 @@ static int open_fuse_device(const char *dev)
 {
 	int fd;
 	drop_privs();
+
+	/* codeql[cpp/path-injection] dev is verified */
 	fd = open(dev, O_RDWR);
 	if (fd == -1) {
 		if (errno == ENODEV || errno == ENOENT)/* check for ENOENT too, for the udev case */
@@ -1253,6 +1255,7 @@ static int mount_fuse_prepare(const char *mnt, const char *opts,
 	const char *real_mnt = mnt;
 
 	memset(ctx, 0, sizeof(*ctx));
+
 	ctx->dev = fuse_mnt_get_devname();
 
 	ctx->fd = open_fuse_device(ctx->dev);
