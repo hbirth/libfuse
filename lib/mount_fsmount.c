@@ -353,7 +353,10 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 	unsigned long mount_attrs;
 
 	/* Build type and source strings */
-	type = fuse_mnt_build_type(blkdev, subtype);
+	if (strcmp(source_dev, "/dev/redfs") == 0)
+		type = redfs_mnt_build_type(blkdev, subtype);
+	else
+		type = fuse_mnt_build_type(blkdev, subtype);
 	source = fuse_mnt_build_source(fsname, subtype, source_dev);
 	err = -ENOMEM;
 	if (!type || !source) {

@@ -978,7 +978,10 @@ static int prepare_mount(const char *opts, struct mount_params *mp)
 		mp->fd, mp->rootmode, getuid(), getgid());
 
 	mp->source = fuse_mnt_build_source(mp->fsname, mp->subtype, mp->dev);
-	mp->type = fuse_mnt_build_type(mp->blkdev, mp->subtype);
+	if (strcmp(mp->dev, "/dev/redfs") == 0)
+		mp->type = redfs_mnt_build_type(mp->blkdev, mp->subtype);
+	else
+		mp->type = fuse_mnt_build_type(mp->blkdev, mp->subtype);
 	if (!mp->type || !mp->source) {
 		fprintf(stderr, "%s: failed to allocate memory\n", progname);
 		goto err;

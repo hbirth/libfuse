@@ -657,7 +657,11 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 	const char *devname = fuse_mnt_get_devname();
 	res = -ENOMEM;
 	source = fuse_mnt_build_source(mo->fsname, mo->subtype, devname);
-	type = fuse_mnt_build_type(mo->blkdev, mo->subtype);
+
+	if (strcmp(devname, "/dev/redfs") == 0)
+		type = redfs_mnt_build_type(mo->blkdev, mo->subtype);
+	else
+		type = fuse_mnt_build_type(mo->blkdev, mo->subtype);
 	if (!type || !source) {
 		fuse_log(FUSE_LOG_ERR, "%s: failed to allocate memory\n",
 			 __func__);
@@ -675,7 +679,10 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 		free(source);
 		free(type);
 
-		type = fuse_mnt_build_type(mo->blkdev, NULL);
+		if (strcmp(devname, "/dev/redfs") == 0)
+			type = redfs_mnt_build_type(mo->blkdev, NULL);
+		else
+			type = fuse_mnt_build_type(mo->blkdev, NULL);
 		source = fuse_mnt_build_source(mo->fsname, NULL, devname);
 
 		if (!type || !source) {
@@ -699,10 +706,10 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 			if (mo->blkdev && errno == ENODEV &&
 			    !fuse_mnt_check_fuseblk())
 				fuse_log(FUSE_LOG_ERR,
-					 "fuse: 'fuseblk' support missing\n");
+					 "redfs: 'redfsblk' support missing\n");
 			else
 				fuse_log(FUSE_LOG_ERR,
-					 "fuse: mount failed: %s\n",
+					 "redfs: mount failed: %s\n",
 					 strerror(errno_save));
 		}
 

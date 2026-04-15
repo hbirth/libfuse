@@ -593,3 +593,20 @@ char *fuse_mnt_build_type(int blkdev, const char *subtype)
 
 	return type;
 }
+
+char *redfs_mnt_build_type(int blkdev, const char *subtype)
+{
+	char *type;
+	int ret;
+
+	if (subtype)
+		ret = asprintf(&type, "%s.%s", blkdev ? "redfsblk" : "redfs",
+			       subtype);
+	else
+		ret = asprintf(&type, "%s", blkdev ? "redfsblk" : "redfs");
+
+	if (ret == -1)
+		return NULL;
+
+	return type;
+}

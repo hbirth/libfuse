@@ -41,5 +41,6 @@ int fuse_mnt_add_mount_helper(const char *mnt, const char *source,
 char *fuse_mnt_build_source(const char *fsname, const char *subtype,
 			     const char *devname);
 char *fuse_mnt_build_type(int blkdev, const char *subtype);
+char *redfs_mnt_build_type(int blkdev, const char *subtype);
 
 #endif /* FUSE_MOUNT_UTIL_H_ */
