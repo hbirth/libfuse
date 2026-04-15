@@ -423,7 +423,6 @@ int fuse_session_loop_mt_312(struct fuse_session *se, struct fuse_loop_config *c
 			fuse_uring_stop(se);
 	}
 
-	pthread_mutex_destroy(&se->mt_lock);
 	if(se->error != 0)
 		err = se->error;
 
