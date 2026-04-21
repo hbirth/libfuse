@@ -1199,6 +1199,42 @@ static void sfs_flock(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi,
     fuse_reply_err(req, res == -1 ? errno : 0);
 }
 
+static void sfs_dlm_lock(fuse_req_t req, fuse_ino_t ino, uint64_t start,
+                         uint64_t end, uint32_t type, fuse_file_info *fi) {
+    (void) ino;
+    (void) fi;
+
+    if (fs.debug) {
+        const char* type_str = "UNKNOWN";
+        switch(type) {
+            case FUSE_LL_DLM_LOCK_NONE:
+                type_str = "NONE";
+                break;
+            case FUSE_LL_DLM_LOCK_READ:
+                type_str = "READ";
+                break;
+            case FUSE_LL_DLM_LOCK_WRITE:
+                type_str = "WRITE";
+                break;
+            case FUSE_LL_DLM_PAGE_MKWRITE:
+                type_str = "PAGE_MKWRITE";
+                break;
+        }
+        cerr << "DEBUG: dlm_lock(): ino=" << ino
+             << ", start=" << start
+             << ", end=" << end
+             << ", type=" << type_str << endl;
+    }
+
+    /* In a passthrough filesystem, we simply grant the requested lock range.
+     * A more sophisticated implementation might:
+     * - Track lock ranges to handle conflicts
+     * - Forward lock requests to the underlying filesystem
+     * - Implement distributed lock management for multi-client scenarios
+     */
+    fuse_reply_dlm_lock(req, 0, UINT64_MAX);
+}
+
 static void sfs_compound(fuse_req_t req, uint32_t count, uint32_t flags,
                          const void *arg) {
     (void) count;
@@ -1368,6 +1404,7 @@ static void assign_operations(fuse_lowlevel_ops &sfs_oper) {
     sfs_oper.removexattr = sfs_removexattr;
 #endif
     sfs_oper.compound = sfs_compound;
+    sfs_oper.dlm_lock = sfs_dlm_lock;
 }
 
 static void print_usage(char *prog_name) {
