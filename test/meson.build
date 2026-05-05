@@ -24,7 +24,8 @@ td += executable('test_teardown_watchdog', 'test_teardown_watchdog.c',
                  install: false)
 
 test_scripts = [ 'conftest.py', 'pytest.ini', 'test_examples.py',
-                 'util.py', 'test_ctests.py', 'test_custom_io.py' ]
+                 'util.py', 'test_ctests.py', 'test_custom_io.py',
+                 'test_mount_state.py' ]
 td += custom_target('test_scripts', input: test_scripts,
                       output: test_scripts, build_by_default: true,
                       command: ['cp', '-fPp',
