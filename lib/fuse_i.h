@@ -77,6 +77,12 @@ struct fuse_req {
 
 	bool is_uring;
 	struct fuse_compound_ctx compound;
+
+	void *secctx;
+	size_t secctx_len;
+	uint32_t secctx_count;      /* Number of security contexts (nr_secctx) */
+	uint32_t secctx_iter_index; /* Current iterator position */
+	const char *secctx_iter_ptr; /* Current iterator pointer */
 };
 
 struct fuse_notify_req {
