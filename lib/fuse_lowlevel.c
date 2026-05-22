@@ -2850,6 +2850,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	uint64_t outargflags = 0;
 	bool buf_reallocable = se->buf_reallocable;
 	(void) nodeid;
+	bool enable_io_uring = false;
+
 	if (se->debug) {
 		fuse_log(FUSE_LOG_DEBUG, "INIT: %u.%u\n", arg->major, arg->minor);
 		if (arg->major == 7 && arg->minor >= 6) {
@@ -3121,8 +3123,10 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	}
 	if (se->conn.want_ext & FUSE_CAP_NO_EXPORT_SUPPORT)
 		outargflags |= FUSE_NO_EXPORT_SUPPORT;
-	if (se->conn.want_ext & FUSE_CAP_OVER_IO_URING)
+	if (se->uring.enable && se->conn.want_ext & FUSE_CAP_OVER_IO_URING) {
 		outargflags |= FUSE_OVER_IO_URING;
+		enable_io_uring = true;
+	}
 	if (se->conn.want_ext & FUSE_CAP_INVAL_INODE_ENTRY)
 		outargflags |= FUSE_INVAL_INODE_ENTRY;
 	if (se->conn.want_ext & FUSE_CAP_EXPIRE_INODE_ENTRY)
@@ -3190,7 +3194,7 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 
 	send_reply_ok(req, &outarg, outargsize);
 
-	if (se->uring.enable && se->conn.want_ext & FUSE_CAP_OVER_IO_URING)
+	if (enable_io_uring)
 		fuse_uring_start(se);
 }
 
