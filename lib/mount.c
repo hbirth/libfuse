@@ -660,7 +660,7 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 	int res;
 	const char *devname = fuse_mnt_get_devname();
 	res = -ENOMEM;
-	source = fuse_mnt_build_source(mo->fsname, mo->subtype, devname);
+	source = fuse_mnt_build_source(mo->fsname, mo->subtype, devname, 0);
 
 	if (strcmp(devname, "/dev/redfs") == 0)
 		type = redfs_mnt_build_type(mo->blkdev, mo->subtype);
@@ -675,11 +675,6 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 	res = mount(source, mnt, type, mo->flags, mo->kernel_opts);
 	if (res == -1 && errno == ENODEV && mo->subtype) {
 		/* Probably missing subtype support */
-
-		/*
-		 * The allocated space by fuse_mnt_build_{source,type}
-		 * might be too small.
-		 */
 		free(source);
 		free(type);
 
@@ -687,7 +682,13 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 			type = redfs_mnt_build_type(mo->blkdev, NULL);
 		else
 			type = fuse_mnt_build_type(mo->blkdev, NULL);
-		source = fuse_mnt_build_source(mo->fsname, NULL, devname);
+
+		if (mo->fsname && !mo->blkdev) {
+			source = fuse_mnt_build_source(mo->fsname, mo->subtype,
+						       devname, 1);
+		} else {
+			source = strdup(type);
+		}
 
 		if (!type || !source) {
 			fuse_log(FUSE_LOG_ERR,

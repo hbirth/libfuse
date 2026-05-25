@@ -312,7 +312,7 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 		type = redfs_mnt_build_type(blkdev, subtype);
 	else
 		type = fuse_mnt_build_type(blkdev, subtype);
-	source = fuse_mnt_build_source(fsname, subtype, source_dev);
+	source = fuse_mnt_build_source(fsname, subtype, source_dev, 0);
 	err = -ENOMEM;
 	if (!type || !source) {
 		fprintf(stderr, "fuse: failed to allocate memory\n");
