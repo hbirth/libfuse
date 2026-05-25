@@ -641,6 +641,17 @@ int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 			     entrysize + sizeof(struct fuse_open_out));
 }
 
+int fuse_reply_lookupx(fuse_req_t req, const struct fuse_entry_param *e,
+			uint32_t mask)
+{
+	struct fuse_lookupx_out arg;
+
+	memset(&arg, 0, sizeof(arg));
+	fill_entry(&arg.entry, e);
+	arg.mask = mask;
+	return send_reply_ok(req, &arg, sizeof(arg));
+}
+
 int fuse_reply_dlm_lock(fuse_req_t req, uint64_t start, uint64_t end)
 {
 	struct fuse_dlm_lock_out arg;
@@ -1559,6 +1570,24 @@ static void do_lookup(fuse_req_t req, const fuse_ino_t nodeid,
 		      const void *inarg)
 {
 	_do_lookup(req, nodeid, NULL, inarg);
+}
+
+static void _do_lookupx(fuse_req_t req, const fuse_ino_t nodeid,
+			const void *op_in, const void *in_payload)
+{
+	const struct fuse_lookupx_in *arg = (const struct fuse_lookupx_in *)op_in;
+	char *name = (char *)in_payload;
+
+	if (req->se->op.lookupx)
+		req->se->op.lookupx(req, nodeid, name, arg->lookup_flags);
+	else
+		fuse_reply_err(req, ENOSYS);
+}
+
+static void do_lookupx(fuse_req_t req, const fuse_ino_t nodeid,
+			const void *inarg)
+{
+	_do_lookupx(req, nodeid, inarg, PARAM(inarg));
 }
 
 static void _do_forget(fuse_req_t req, const fuse_ino_t nodeid,
@@ -3632,6 +3661,7 @@ static struct {
 	[FUSE_STATX]	   = { do_statx,       "STATX"	     },
 	[FUSE_DLM_WB_LOCK] = { do_dlm_lock,	"DLM_WB_LOCK" },
 	[FUSE_COMPOUND]	   = { do_compound,    "COMPOUND"    },
+	[FUSE_LOOKUPX]	   = { do_lookupx,     "LOOKUPX"     },
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
 
@@ -3689,6 +3719,7 @@ static struct {
 	[FUSE_STATX]		= { _do_statx,		"STATX" },
 	[FUSE_COMPOUND]		= { _do_compound,	"COMPOUND" },
 	[FUSE_DLM_WB_LOCK]	= { _do_dlm_lock,	"DLM_WB_LOCK" },
+	[FUSE_LOOKUPX]		= { _do_lookupx,	"LOOKUPX" },
 	[CUSE_INIT]		= { _cuse_lowlevel_init, "CUSE_INIT" },
 };
 

@@ -1092,7 +1092,8 @@ static const struct fuse_lowlevel_ops memfs_oper = {
 	.statx = nullptr,
 #endif
 	.dlm_lock = nullptr,
-	.compound = nullptr
+	.compound = nullptr,
+	.lookupx = nullptr,
 };
 
 int main(int argc, char *argv[])

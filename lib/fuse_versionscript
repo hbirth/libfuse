@@ -221,6 +221,7 @@ FUSE_3.19 {
 	global:
 		fuse_session_start_teardown_watchdog;
 		fuse_session_stop_teardown_watchdog;
+		fuse_reply_lookupx;
 } FUSE_3.18;
 
 # Local Variables:
