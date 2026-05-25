@@ -2812,6 +2812,49 @@ void fuse_compound_set_error(fuse_req_t req, int error)
 	req->compound.error = error;
 }
 
+uint32_t fuse_compound_get_count(fuse_req_t req)
+{
+	return req->compound.input_count;
+}
+
+const struct fuse_in_header *fuse_compound_get_op(fuse_req_t req,
+						  uint32_t index)
+{
+	if (index >= (uint32_t)req->compound.input_count)
+		return NULL;
+	return req->compound.req[index];
+}
+
+uint32_t fuse_compound_get_op_opcode(const struct fuse_in_header *op)
+{
+	return op->opcode;
+}
+
+uint64_t fuse_compound_get_op_nodeid(const struct fuse_in_header *op)
+{
+	return op->nodeid;
+}
+
+const void *fuse_compound_get_op_payload(const struct fuse_in_header *op)
+{
+	return op + 1;
+}
+
+size_t fuse_compound_get_op_payload_size(const struct fuse_in_header *op)
+{
+	return op->len - sizeof(*op);
+}
+
+uint32_t fuse_compound_get_flags(fuse_req_t req)
+{
+	return req->compound.flags;
+}
+
+int fuse_compound_get_error(fuse_req_t req)
+{
+	return req->compound.error;
+}
+
 void fuse_compound_start(fuse_req_t req)
 {
 	req->is_compound = true;

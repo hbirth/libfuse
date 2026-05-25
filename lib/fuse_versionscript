@@ -215,6 +215,14 @@ FUSE_3.18 {
 		fuse_compound_end;
 		fuse_compound_prepare_result;
 		fuse_compound_set_error;
+		fuse_compound_get_count;
+		fuse_compound_get_op;
+		fuse_compound_get_op_opcode;
+		fuse_compound_get_op_nodeid;
+		fuse_compound_get_op_payload;
+		fuse_compound_get_op_payload_size;
+		fuse_compound_get_flags;
+		fuse_compound_get_error;
 
 		fuse_reply_statx;
 		fuse_fs_statx;
