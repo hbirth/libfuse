@@ -1740,6 +1740,90 @@ void fuse_compound_start(fuse_req_t req);
 void fuse_compound_end(fuse_req_t req);
 
 /**
+ * Get the number of operations in a compound request.
+ *
+ * Must be called from a compound() callback (or any code path where @p req
+ * refers to a compound request being processed).
+ *
+ * @param req compound request handle
+ * @return number of operations in the compound
+ */
+uint32_t fuse_compound_get_count(fuse_req_t req);
+
+/**
+ * Get the opcode of the sub-operation at @p index in a compound request.
+ *
+ * @param req compound request handle
+ * @param index operation index in range [0, fuse_compound_get_count(req))
+ * @return the FUSE opcode (see enum fuse_opcode in <fuse_kernel.h>),
+ *	   or 0 if @p index is out of range
+ */
+uint32_t fuse_compound_get_op_opcode(fuse_req_t req, uint32_t index);
+
+/**
+ * Get the target inode of the sub-operation at @p index.
+ *
+ * Note: the kernel typically fills the nodeid only on the first op of a
+ * compound; subsequent ops inherit it implicitly.
+ *
+ * @param req compound request handle
+ * @param index operation index in range [0, fuse_compound_get_count(req))
+ * @return the FUSE inode number this op targets, or 0 if @p index is out
+ *	   of range
+ */
+uint64_t fuse_compound_get_op_nodeid(fuse_req_t req, uint32_t index);
+
+/**
+ * Get the op-specific input payload of the sub-operation at @p index.
+ *
+ * The caller is expected to cast the returned pointer to the input
+ * structure appropriate for the opcode (e.g. struct fuse_create_in for
+ * FUSE_CREATE). For ops whose payload is a name string (lookup, unlink,
+ * ...) the pointer is the start of the NUL-terminated name.
+ *
+ * @param req compound request handle
+ * @param index operation index in range [0, fuse_compound_get_count(req))
+ * @return pointer to the op-specific input payload, or NULL if @p index
+ *	   is out of range
+ */
+const void *fuse_compound_get_op_payload(fuse_req_t req, uint32_t index);
+
+/**
+ * Get the size of the op-specific input payload of the sub-operation at
+ * @p index.
+ *
+ * @param req compound request handle
+ * @param index operation index in range [0, fuse_compound_get_count(req))
+ * @return payload size in bytes, or 0 if @p index is out of range
+ */
+size_t fuse_compound_get_op_payload_size(fuse_req_t req, uint32_t index);
+
+/**
+ * Get the compound flags for the current compound request.
+ *
+ * Same value that is passed as the `flags` argument to the compound()
+ * callback; this accessor is useful for helpers called downstream of the
+ * callback that did not get the flags threaded through.
+ *
+ * @param req compound request handle
+ * @return compound flags
+ */
+uint32_t fuse_compound_get_flags(fuse_req_t req);
+
+/**
+ * Get the current error state of a compound request.
+ *
+ * Returns the first error recorded by fuse_compound_set_error() or by
+ * fuse_compound_prepare_result(), or 0 if no error has been recorded.
+ * Useful for short-circuiting later ops in a multi-step compound once a
+ * prior op has failed.
+ *
+ * @param req compound request handle
+ * @return current error code (0 means no error)
+ */
+int fuse_compound_get_error(fuse_req_t req);
+
+/**
  * Execute compound operations sequentially
  *
  * Executes each operation in the compound request one by one,

@@ -54,6 +54,7 @@
 #include <err.h>
 #include <errno.h>
 #include <ftw.h>
+#include <fuse_kernel.h>
 #include <fuse_lowlevel.h>
 #include <inttypes.h>
 #include <string.h>
@@ -1237,12 +1238,129 @@ static void sfs_dlm_lock(fuse_req_t req, fuse_ino_t ino, uint64_t start,
 
 static void sfs_compound(fuse_req_t req, uint32_t count, uint32_t flags,
                          const void *arg) {
-    (void) count;
     (void) flags;
-    (void) arg;
 
-    /* Trivial implementation: just execute operations sequentially */
-    fuse_execute_compound_sequential(req);
+    cerr << "DEBUG: compound: enter count=" << count
+         << " flags=" << flags << " arg=" << arg << endl;
+
+    if (count != 2) {
+        cerr << "DEBUG: compound: rejecting count != 2" << endl;
+        fuse_reply_err(req, EOPNOTSUPP);
+        return;
+    }
+
+    auto op0 = static_cast<const struct fuse_in_header *>(arg);
+    cerr << "DEBUG: compound: op0=" << static_cast<const void *>(op0)
+         << " op0->len=" << op0->len
+         << " op0->opcode=" << op0->opcode
+         << " op0->nodeid=" << op0->nodeid
+         << " op0->unique=" << op0->unique << endl;
+
+    auto op1 = reinterpret_cast<const struct fuse_in_header *>(
+        reinterpret_cast<const char *>(op0) + op0->len);
+    cerr << "DEBUG: compound: op1=" << static_cast<const void *>(op1)
+         << " op1->len=" << op1->len
+         << " op1->opcode=" << op1->opcode
+         << " op1->nodeid=" << op1->nodeid
+         << " op1->unique=" << op1->unique << endl;
+
+    if (op0->opcode != FUSE_LOOKUP || op1->opcode != FUSE_CREATE) {
+        cerr << "DEBUG: compound: opcodes not LOOKUP+CREATE, bailing" << endl;
+        fuse_reply_err(req, EOPNOTSUPP);
+        return;
+    }
+
+    /* The kernel only fills the nodeid on the first op (LOOKUP); the
+     * CREATE op inherits it implicitly. Reuse op0->nodeid as parent. */
+    fuse_ino_t parent = op0->nodeid;
+    auto name = reinterpret_cast<const char *>(op0 + 1);
+    auto create_in = reinterpret_cast<const struct fuse_create_in *>(op1 + 1);
+
+    cerr << "DEBUG: compound: parent=" << parent
+         << " name='" << name << "'"
+         << " create.flags=0x" << std::hex << create_in->flags
+         << " create.mode=0" << std::oct << create_in->mode
+         << " create.umask=0" << create_in->umask
+         << " create.open_flags=0x" << std::hex << create_in->open_flags
+         << std::dec << endl;
+
+    Inode& inode_p = get_inode(parent);
+    cerr << "DEBUG: compound: parent inode fd=" << inode_p.fd << endl;
+
+    int fd = openat(inode_p.fd, name,
+                    (create_in->flags | O_CREAT | O_EXCL) & ~O_NOFOLLOW,
+                    create_in->mode);
+    int openat_errno = errno;
+    cerr << "DEBUG: compound: openat returned fd=" << fd
+         << " errno=" << (fd == -1 ? openat_errno : 0) << endl;
+    if (fd == -1 && openat_errno != EEXIST) {
+        fuse_reply_err(req, openat_errno);
+        return;
+    }
+    const bool was_created = (fd != -1);
+
+    fuse_entry_param e {};
+    int err = do_lookup(parent, name, &e);
+    cerr << "DEBUG: compound: do_lookup err=" << err
+         << " e.ino=" << e.ino
+         << " e.attr.st_ino=" << e.attr.st_ino
+         << " was_created=" << was_created << endl;
+    if (err) {
+        if (fd != -1) close(fd);
+        fuse_reply_err(req, err);
+        return;
+    }
+
+    /* Reply shape required by kernel fuse_compound_lookup_create()
+     * (fs/fuse/dir.c:751):
+     *
+     *   File existed (Branch 1: !lookup_err && outlookup.nodeid):
+     *     - LOOKUP slot: positive fuse_entry_out
+     *     - CREATE slot: empty (kernel discards it, then calls
+     *       finish_no_open() so the VFS retries via a separate OPEN).
+     *
+     *   File newly created (Branch 2: lookup_err == -ENOENT
+     *                       || outlookup.nodeid == 0):
+     *     - LOOKUP slot: negative entry (nodeid = 0)
+     *     - CREATE slot: fuse_entry_out + fuse_open_out (via fuse_reply_create)
+     *
+     * The lookup-count taken by do_lookup() above is consumed by whichever
+     * slot the kernel uses. */
+    cerr << "DEBUG: compound: calling fuse_compound_start" << endl;
+    fuse_compound_start(req);
+
+    if (!was_created) {
+        cerr << "DEBUG: compound: existed-path (positive LOOKUP, empty CREATE)" << endl;
+        fuse_reply_entry(req, &e);
+        fuse_compound_prepare_result(req, 0, nullptr, 0);
+    } else {
+        cerr << "DEBUG: compound: created-path (negative LOOKUP, positive CREATE)" << endl;
+        fuse_entry_param negative {};
+        negative.attr_timeout = fs.timeout;
+        negative.entry_timeout = fs.timeout;
+        fuse_reply_entry(req, &negative);
+
+        fuse_file_info fi {};
+        fi.flags = create_in->flags;
+        fi.fh = fd;
+        {
+            Inode& inode = get_inode(e.ino);
+            lock_guard<mutex> g {inode.m};
+            inode.nopen++;
+            cerr << "DEBUG: compound: inode.nopen now " << inode.nopen << endl;
+        }
+        sfs_create_open_flags(&fi);
+        if (fs.passthrough) {
+            do_passthrough_open(req, e.ino, fd, &fi);
+            cerr << "DEBUG: compound: after do_passthrough_open fi.backing_id="
+                 << fi.backing_id << endl;
+        }
+        fuse_reply_create(req, &e, &fi);
+    }
+
+    fuse_compound_end(req);
+    fuse_reply_compound(req, 2, nullptr, 0);
+    cerr << "DEBUG: compound: returned from fuse_reply_compound" << endl;
 }
 
 

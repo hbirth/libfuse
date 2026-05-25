@@ -2841,6 +2841,53 @@ void fuse_compound_set_error(fuse_req_t req, int error)
 	req->compound.error = error;
 }
 
+uint32_t fuse_compound_get_count(fuse_req_t req)
+{
+	return req->compound.input_count;
+}
+
+static inline const struct fuse_in_header *
+compound_op_at(fuse_req_t req, uint32_t index)
+{
+	if (index >= (uint32_t)req->compound.input_count)
+		return NULL;
+	return req->compound.req[index];
+}
+
+uint32_t fuse_compound_get_op_opcode(fuse_req_t req, uint32_t index)
+{
+	const struct fuse_in_header *op = compound_op_at(req, index);
+	return op ? op->opcode : 0;
+}
+
+uint64_t fuse_compound_get_op_nodeid(fuse_req_t req, uint32_t index)
+{
+	const struct fuse_in_header *op = compound_op_at(req, index);
+	return op ? op->nodeid : 0;
+}
+
+const void *fuse_compound_get_op_payload(fuse_req_t req, uint32_t index)
+{
+	const struct fuse_in_header *op = compound_op_at(req, index);
+	return op ? op + 1 : NULL;
+}
+
+size_t fuse_compound_get_op_payload_size(fuse_req_t req, uint32_t index)
+{
+	const struct fuse_in_header *op = compound_op_at(req, index);
+	return op ? op->len - sizeof(*op) : 0;
+}
+
+uint32_t fuse_compound_get_flags(fuse_req_t req)
+{
+	return req->compound.flags;
+}
+
+int fuse_compound_get_error(fuse_req_t req)
+{
+	return req->compound.error;
+}
+
 void fuse_compound_start(fuse_req_t req)
 {
 	req->is_compound = true;
