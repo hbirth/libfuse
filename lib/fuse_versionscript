@@ -210,8 +210,11 @@ FUSE_3.18 {
 		fuse_uring_get_req_payload_mr;
 		fuse_reply_dlm_lock;
 		fuse_reply_compound;
-		fuse_set_compound_error;
 		fuse_execute_compound_sequential;
+		fuse_compound_start;
+		fuse_compound_end;
+		fuse_compound_prepare_result;
+		fuse_compound_set_error;
 
 		fuse_reply_statx;
 		fuse_fs_statx;
