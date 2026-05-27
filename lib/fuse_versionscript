@@ -227,6 +227,7 @@ FUSE_3.19 {
 		fuse_daemonize_early_fail;
 		fuse_daemonize_early_is_active;
 		fuse_session_set_debug;
+		fuse_reply_lookupx;
 } FUSE_3.18;
 
 # Local Variables:

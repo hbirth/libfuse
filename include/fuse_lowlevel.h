@@ -182,6 +182,9 @@ enum fuse_ll_dlm_lock_type {
 	FUSE_LL_DLM_PAGE_MKWRITE = 3,
 };
 
+#define FUSE_LOOKUPX_FOR_REVALIDATE (1 << 0)
+#define FUSE_LOOKUPX_TARGET_WAS_DIR (1 << 1)
+
 /* ----------------------------------------------------------- *
  * Request methods and replies				       *
  * ----------------------------------------------------------- */
@@ -1409,6 +1412,24 @@ struct fuse_lowlevel_ops {
 	 * @param arg raw payload data
 	 */
 	void (*compound) (fuse_req_t req, uint32_t count, uint32_t flags, const void* arg);
+
+	/**
+	 * Extended lookup - Look up a directory entry by name with additional flags.
+	 *
+	 * This is an extended version of lookup that supports additional flags
+	 * and returns attributes with valid masks via fuse_reply_lookupx.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_lookupx
+	 *   fuse_reply_err
+	 *
+	 * @param req request handle
+	 * @param parent inode number of the parent directory
+	 * @param name the name to look up
+	 * @param flags lookup flags (e.g., FUSE_LOOKUPX_FOR_REVALIDATE)
+	 */
+	void (*lookupx) (fuse_req_t req, fuse_ino_t parent, const char *name,
+			 uint32_t flags);
 };
 
 /**
@@ -1481,6 +1502,23 @@ int fuse_reply_entry(fuse_req_t req, const struct fuse_entry_param *e);
  */
 int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 		      const struct fuse_file_info *fi);
+
+/**
+ * Reply with extended lookup information
+ *
+ * Possible requests:
+ *   lookupx
+ *
+ * Side effects:
+ *   increments the lookup count on success
+ *
+ * @param req request handle
+ * @param e the entry parameters
+ * @param mask bitmask of valid statx fields (STATX_* flags)
+ * @return zero for success, -errno for failure to send reply
+ */
+int fuse_reply_lookupx(fuse_req_t req, const struct fuse_entry_param *e,
+			uint32_t mask);
 
 /**
  * Reply with attributes
