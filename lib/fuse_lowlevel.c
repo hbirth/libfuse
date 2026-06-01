@@ -89,6 +89,9 @@ struct fuse_timeout_thread {
 
 static size_t pagesize;
 
+/* Forward declaration */
+static void compound_ctx_cleanup(struct fuse_req *req);
+
 static __attribute__((constructor)) void fuse_ll_init_pagesize(void)
 {
 	pagesize = getpagesize();
@@ -514,7 +517,15 @@ static int send_reply_ok(fuse_req_t req, const void *arg, size_t argsize)
 
 int fuse_reply_err(fuse_req_t req, int err)
 {
-	return send_reply(req, -err, NULL, 0);
+	int ret = send_reply(req, -err, NULL, 0);
+
+	/* If this was called for a compound request that has been initialized,
+	 * clean up the compound context. Check out_buffer to detect this. */
+	if (req->compound.out_buffer != NULL) {
+		compound_ctx_cleanup(req);
+	}
+
+	return ret;
 }
 
 void fuse_reply_none(fuse_req_t req)
@@ -1419,15 +1430,20 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 	if (req->is_uring) {
 		ret = send_reply_uring(req, req->compound.error, req->compound.out_buffer,
 				req->compound.result_size);
+		/* Clean up compound context after sending reply */
+		compound_ctx_cleanup(req);
 	} else {
-		if (req->compound.error == 0)
+		if (req->compound.error == 0) {
 			ret = send_reply_ok(req, req->compound.out_buffer,
 				req->compound.result_size);
-		else
+			/* Clean up compound context after sending reply */
+			compound_ctx_cleanup(req);
+		} else {
+			/* fuse_reply_err() will handle cleanup for us */
 			ret = fuse_reply_err(req, req->compound.error);
+		}
 	}
-	free(req->compound.out_buffer);
-	req->compound.out_buffer = NULL;
+
 	return ret;
 }
 
@@ -1542,7 +1558,8 @@ static void _do_compound(fuse_req_t req, const fuse_ino_t nodeid,
 		fuse_reply_err(req, ENOSYS);
 	}
 
-	compound_ctx_cleanup(req);
+	/* Do not cleanup here - handler may execute asynchronously.
+	 * Cleanup will happen in fuse_reply_compound() or fuse_reply_err(). */
 }
 
 static void do_compound(fuse_req_t req, const fuse_ino_t nodeid, const void *inarg)
