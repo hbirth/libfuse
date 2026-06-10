@@ -3043,7 +3043,6 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 
 	se->conn.time_gran = 1;
 
-	se->got_init = 1;
 	if (se->op.init) {
 		uint64_t want_ext_default = se->conn.want_ext;
 		uint32_t want_default = fuse_lower_32_bits(se->conn.want_ext);
