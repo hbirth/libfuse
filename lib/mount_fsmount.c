@@ -451,6 +451,7 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 	/* Try to open filesystem context */
 	fsfd = fsopen(type, FSOPEN_CLOEXEC);
 	if (fsfd == -1) {
+		err = -errno;
 		if (errno != EPERM)
 			fprintf(stderr, "fuse: fsopen(%s) failed: %s\n", type,
 				strerror(errno));
@@ -481,8 +482,8 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 	}
 
 	/* Apply VFS superblock (fsconfig) flags (ro, sync, dirsync) */
-	res = set_fsconfig_ms_flags(fsfd, &flags);
-	if (res != 0)
+	err = set_fsconfig_ms_flags(fsfd, &flags);
+	if (err != 0)
 		goto out_free;
 
 	/* Apply kernel options */
@@ -509,7 +510,7 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 	flags = ms_flags_to_mount_attrs(flags, &mount_attrs);
 	if (flags != 0) {
 		/* unsupported flags found, either fsconfig or mount attr flags  */
-		errno = ENOTSUP;
+		err = -ENOTSUP;
 		goto out_free;
 	}
 
@@ -535,9 +536,11 @@ int fuse_kern_fsmount(const char *mnt, unsigned long flags, int blkdev,
 		goto out_close_mntfd;
 	}
 
-	err = fuse_mnt_add_mount_helper(mnt, source, type, mtab_opts);
-	if (err == -1)
+	res = fuse_mnt_add_mount_helper(mnt, source, type, mtab_opts);
+	if (res == -1) {
+		err = -EIO;
 		goto out_umount;
+	}
 
 	close(mntfd);
 	free(source);
