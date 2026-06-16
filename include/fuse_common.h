@@ -725,8 +725,8 @@ struct fuse_conn_info {
 	uint64_t want_ext;
 
 	/**
-	 * page order (power of 2 exponent for number of pages) for
-	 * optimal io-size alignment
+	 * alignment order (power of 2 exponent of the IO size in bytes)
+	 * for optimal io-size alignment
 	 */
 	uint8_t align_page_order;
 
