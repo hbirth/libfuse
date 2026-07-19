@@ -5022,15 +5022,14 @@ static void *session_sync_init_worker(void *data)
 /*
  * Enable synchronous FUSE_INIT and start worker thread
  *
- * @param is_sync_init set to true on return if sync init is enabled
+ * Sets se->is_sync_init to true if sync init is enabled.
  * Returns 0 on success or kernel does not support it, -errno on unexpected failure
  */
-static int session_start_sync_init(struct fuse_session *se, int fd,
-				   bool *is_sync_init)
+static int session_start_sync_init(struct fuse_session *se, int fd)
 {
 	int err, res;
 
-	*is_sync_init = false;
+	se->is_sync_init = false;
 
 	/*
 	 * Older fuse servers do not set want_sync_init or start the new
@@ -5082,6 +5081,9 @@ static int session_start_sync_init(struct fuse_session *se, int fd,
 		return -EIO;
 	}
 
+	/* Must be set before the worker exists - it reads this in _do_init() */
+	se->is_sync_init = true;
+
 	err = pthread_create(&se->init_thread, NULL,
 				session_sync_init_worker, se);
 	if (err != 0) {
@@ -5089,12 +5091,11 @@ static int session_start_sync_init(struct fuse_session *se, int fd,
 			FUSE_LOG_ERR,
 			"fuse: failed to create init worker thread: %s\n",
 			strerror(err));
+		se->is_sync_init = false;
 		close(se->init_wakeup_fd);
 		se->init_wakeup_fd = -1;
 		return -EIO;
 	}
-
-	*is_sync_init = true;
 
 	return 0;
 }
@@ -5123,7 +5124,7 @@ static int session_wait_sync_init_completion(struct fuse_session *se)
 	if (err != 0) {
 		fuse_log(FUSE_LOG_ERR, "fuse: failed to join init worker thread: %s\n",
 			 strerror(err));
-		return -1;
+		goto err;
 	}
 
 	if (se->init_wakeup_fd != -1) {
@@ -5136,15 +5137,19 @@ static int session_wait_sync_init_completion(struct fuse_session *se)
 	if (se->init_error != 0) {
 		fuse_log(FUSE_LOG_ERR, "fuse: init worker failed: %s\n",
 			 strerror(-se->init_error));
-		return -1;
+		goto err;
 	}
 
 	if (fuse_session_exited(se)) {
 		fuse_log(FUSE_LOG_ERR, "FUSE_INIT failed: session exited\n");
-		return -1;
+		goto err;
 	}
 
 	return 0;
+
+err:
+	se->is_sync_init = false;
+	return -1;
 }
 
 /*
@@ -5154,8 +5159,7 @@ static int session_wait_sync_init_completion(struct fuse_session *se)
 static int new_api_fusermount(struct fuse_session *se,
 			      const char *mountpoint,
 			      const char *mtab_opts,
-			      int *sock_fd, pid_t *fusermount_pid,
-			      bool *is_sync_init)
+			      int *sock_fd, pid_t *fusermount_pid)
 {
 	int fd, err;
 
@@ -5178,7 +5182,7 @@ static int new_api_fusermount(struct fuse_session *se,
 
 	/* Start worker thread with correct fd from redfsmount */
 	se->fd = fd;
-	err = session_start_sync_init(se, fd, is_sync_init);
+	err = session_start_sync_init(se, fd);
 	if (err) {
 		fuse_log(FUSE_LOG_ERR,
 			 "fuse: failed to start sync init worker\n");
@@ -5215,7 +5219,6 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 	char *mtab_opts = NULL;
 	char *mtab_opts_with_fd = NULL;
 	char fd_opt[32];
-	bool is_sync_init = false;
 
 	res = fuse_kern_mount_get_base_mtab_opts(se->mo, &mtab_opts);
 	err = -EIO;
@@ -5232,7 +5235,7 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 	}
 
 	se->fd = fd;
-	err = session_start_sync_init(se, fd, &is_sync_init);
+	err = session_start_sync_init(se, fd);
 	if (err)
 		goto err;
 
@@ -5253,7 +5256,6 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 		close(fd);
 		fd = -1;
 		se->fd = -1;
-
 		/*
 		 * redfsmount receives fsname/subtype (and other fusermount
 		 * options) only via -o, so mirror the legacy fuse_kern_mount()
@@ -5274,8 +5276,7 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 		}
 
 		fd = new_api_fusermount(se, mountpoint, fusermount_opts,
-					&sock_fd, &fusermount_pid,
-					&is_sync_init);
+					&sock_fd, &fusermount_pid);
 		free(fusermount_opts);
 		if (fd < 0) {
 			err = fd;
@@ -5312,8 +5313,8 @@ err:
 		fd = -1;
 		se->fd = -1;
 		se->error = err;
+		se->is_sync_init = false;
 	}
-	se->is_sync_init = is_sync_init;
 
 	/* Wait for synchronous FUSE_INIT to complete */
 	if (session_wait_sync_init_completion(se) < 0)
