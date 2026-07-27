@@ -56,6 +56,7 @@
 #include <ftw.h>
 #include <fuse_kernel.h>
 #include <fuse_lowlevel.h>
+#include <fuse_daemonize.h>
 #include <inttypes.h>
 #include <string.h>
 #include <sys/file.h>
@@ -153,7 +154,8 @@ struct Fs {
     Inode root;
     double timeout;
     bool debug;
-    bool debug_fuse;
+    bool debug_fuse; // foreground fuse debug
+    bool bg_debug_fuse; // background fuse debug
     bool foreground;
     std::string source;
     size_t blocksize;
@@ -172,6 +174,7 @@ struct Fs {
     std::string fuse_mount_options;
     bool direct_io;
     bool passthrough;
+    bool selinux;
 };
 static Fs fs{};
 
@@ -212,6 +215,9 @@ static void sfs_init(void *userdata, fuse_conn_info *conn) {
         fuse_set_feature_flag(conn, FUSE_CAP_WRITEBACK_CACHE);
 
     fuse_set_feature_flag(conn, FUSE_CAP_FLOCK_LOCKS);
+    /* Enable security context extension for SELinux support */
+    if (fs.selinux)
+	fuse_set_feature_flag(conn, FUSE_CAP_SECURITY_CTX);
 
     if (fs.nosplice) {
         // FUSE_CAP_SPLICE_READ is enabled in libfuse3 by default,
@@ -455,12 +461,104 @@ static void sfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
 }
 
 
+#ifdef HAVE_SETXATTR
+/**
+ * Stage the requester's SELinux label so the next create is born with it.
+ *
+ * The kernel computes the label a newly created inode should have in the
+ * requesting task's context and sends it in the FUSE security context
+ * extension. passthrough_hp must act on it: a bare mknodat/openat on the
+ * backing filesystem would label the inode from the daemon's own context, not
+ * the requester's. Writing the label to the per-thread fscreate attribute makes
+ * the following create syscall produce a correctly-labelled backing inode
+ * atomically. The override is per worker thread and must be cleared afterwards
+ * with sfs_clear_selinux_fscreate() so later creates are unaffected.
+ *
+ * Demonstrates the security context extension API: fuse_req_secctx_count(),
+ * fuse_req_secctx_reset(), fuse_req_secctx_next().
+ *
+ * @param req FUSE request carrying the security context extension
+ * @return true if a label was staged and must be cleared afterwards
+ */
+static bool sfs_set_selinux_fscreate(fuse_req_t req)
+{
+	if (fuse_req_secctx_count(req) == 0)
+		return false;
+
+	const char *ctx_name;
+	const char *ctx_value;
+	uint32_t ctx_len;
+	bool staged = false;
+
+	while (fuse_req_secctx_next(req, &ctx_name, &ctx_value, &ctx_len) == 0) {
+		if (strcmp(ctx_name, "security.selinux") != 0)
+			continue;
+
+		int fd = open("/proc/thread-self/attr/fscreate",
+			      O_WRONLY | O_CLOEXEC);
+		if (fd == -1) {
+			fuse_log(FUSE_LOG_DEBUG,
+				 "sfs_set_selinux_fscreate: open failed: %s\n",
+				 strerror(errno));
+			break;
+		}
+		/* The label value already includes its trailing NUL. */
+		if (write(fd, ctx_value, ctx_len) == -1)
+			fuse_log(FUSE_LOG_DEBUG,
+				 "sfs_set_selinux_fscreate: write failed: %s\n",
+				 strerror(errno));
+		else {
+			staged = true;
+			/*
+			 * Debug log to verify the label was staged correctly.
+			 * This is important because the underlying filesystem will apply
+			 * a default label anyway, so without this log it's hard to tell
+			 * if our SELinux context handling is actually working.
+			 */
+			fuse_log(FUSE_LOG_DEBUG,
+				 "sfs_set_selinux_fscreate: staged label: %s\n",
+				 ctx_value);
+		}
+		close(fd);
+		break;
+	}
+	fuse_req_secctx_reset(req);
+	return staged;
+}
+
+/* Reset the per-thread fscreate label staged by sfs_set_selinux_fscreate(). */
+static void sfs_clear_selinux_fscreate(void)
+{
+	int fd = open("/proc/thread-self/attr/fscreate", O_WRONLY | O_CLOEXEC);
+	if (fd == -1)
+		return;
+	/* A zero-length write clears the override. */
+	if (write(fd, "", 0) == -1)
+		fuse_log(FUSE_LOG_DEBUG,
+			 "sfs_clear_selinux_fscreate: write failed: %s\n",
+			 strerror(errno));
+	close(fd);
+}
+#else
+static bool sfs_set_selinux_fscreate(fuse_req_t req)
+{
+	(void)req;
+	return false;
+}
+
+static void sfs_clear_selinux_fscreate(void)
+{
+}
+#endif
+
 static void mknod_symlink(fuse_req_t req, fuse_ino_t parent,
                               const char *name, mode_t mode, dev_t rdev,
                               const char *link) {
     int res;
     Inode& inode_p = get_inode(parent);
     auto saverr = ENOMEM;
+
+    bool labeled = sfs_set_selinux_fscreate(req);
 
     if (fs.debug)
         cerr << "DEBUG: mknod_symlink(): name=" << name
@@ -474,6 +572,11 @@ static void mknod_symlink(fuse_req_t req, fuse_ino_t parent,
     else
         res = mknodat(inode_p.fd, name, mode, rdev);
     saverr = errno;
+
+    /* Reset the staged label so later creates on this thread are unaffected. */
+    if (labeled)
+	sfs_clear_selinux_fscreate();
+
     if (res == -1)
         goto out;
 
@@ -907,10 +1010,18 @@ static void sfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                        mode_t mode, fuse_file_info *fi) {
     Inode& inode_p = get_inode(parent);
 
+    bool labeled = sfs_set_selinux_fscreate(req);
+
     auto fd = openat(inode_p.fd, name,
                      (fi->flags | O_CREAT) & ~O_NOFOLLOW, mode);
+    auto create_errno = errno;
+
+    /* Reset the staged label so later creates on this thread are unaffected. */
+    if (labeled)
+	sfs_clear_selinux_fscreate();
+
     if (fd == -1) {
-        auto err = errno;
+        auto err = create_errno;
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
         fuse_reply_err(req, err);
@@ -986,10 +1097,17 @@ static void sfs_tmpfile(fuse_req_t req, fuse_ino_t parent,
                        mode_t mode, fuse_file_info *fi) {
     Inode& parent_inode = get_inode(parent);
 
+    bool labeled = sfs_set_selinux_fscreate(req);
     auto fd = openat(parent_inode.fd, ".",
                      (fi->flags | O_TMPFILE) & ~O_NOFOLLOW, mode);
+    auto create_errno = errno;
+
+    /* Reset the staged label so later creates on this thread are unaffected. */
+    if (labeled)
+	sfs_clear_selinux_fscreate();
+
     if (fd == -1) {
-        auto err = errno;
+        auto err = create_errno;
         if (err == ENFILE || err == EMFILE)
             cerr << "ERROR: Reached maximum number of file descriptors." << endl;
         fuse_reply_err(req, err);
@@ -1567,18 +1685,19 @@ static std::string string_join(const std::vector<std::string>& elems, char delim
     return out.str();
 }
 
-
 static cxxopts::ParseResult parse_options(int argc, char **argv) {
     cxxopts::Options opt_parser(argv[0]);
     std::vector<std::string> mount_options;
     opt_parser.add_options()
         ("debug", "Enable filesystem debug messages")
         ("debug-fuse", "Enable libfuse debug messages")
+        ("bg-debug-fuse", "Enable libfuse debug messages in background")
         ("foreground", "Run in foreground")
         ("help", "Print help")
         ("nocache", "Disable attribute all caching")
         ("nosplice", "Do not use splice(2) to transfer data")
         ("nopassthrough", "Do not use pass-through mode for read/write")
+        ("selinux", "Enable SELinux context from FUSE request extension for create/mkdir/mknod/symlink")
         ("single", "Run single-threaded")
         ("o", "Mount options (see mount.fuse(5) - only use if you know what "
               "you are doing)", cxxopts::value(mount_options))
@@ -1614,6 +1733,7 @@ static cxxopts::ParseResult parse_options(int argc, char **argv) {
 
     fs.debug = options.count("debug") != 0;
     fs.debug_fuse = options.count("debug-fuse") != 0;
+    fs.bg_debug_fuse = options.count("bg-debug-fuse") != 0;
 
     fs.foreground = options.count("foreground") != 0;
     if (fs.debug || fs.debug_fuse)
@@ -1629,6 +1749,7 @@ static cxxopts::ParseResult parse_options(int argc, char **argv) {
     fs.uring.external_threads = options.count("uring-external-threads");
     fs.uring.queue_depth = options["uring-q-depth"].as<int>();
     fs.uring.arglen = options["uring-arglen"].as<int>();
+    fs.selinux = options.count("selinux") != 0;
 
     char* resolved_path = realpath(argv[1], NULL);
     if (resolved_path == NULL)
@@ -1682,6 +1803,7 @@ int main(int argc, char *argv[]) {
 
     struct fuse_loop_config *loop_config = NULL;
 	void *teardown_watchog = NULL;
+	unsigned int daemon_flags = 0;
 
     // Parse command line options
     auto options {parse_options(argc, argv)};
@@ -1747,22 +1869,31 @@ int main(int argc, char *argv[]) {
 
     fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
 
-    fuse_loop_cfg_set_clone_fd(loop_config, fs.clone_fd);
+    if (!fs.foreground)
+	fuse_log_enable_syslog("passthrough-hp", LOG_PID | LOG_CONS,
+			       LOG_DAEMON);
+    if (fs.bg_debug_fuse)
+	fuse_session_set_debug(se);
+
+    /* Start daemonization before mount so parent can report mount failure */
+    if (fs.foreground)
+	daemon_flags |= FUSE_DAEMONIZE_NO_BACKGROUND;
+    if (fuse_daemonize_early_start(daemon_flags) != 0)
+	goto err_out3;
 
     if (fuse_session_mount(se, argv[2]) != 0)
-        goto err_out3;
-
-    fuse_daemonize(fs.foreground);
+	goto err_out4;
 
     if (!fs.foreground)
         fuse_log_enable_syslog("passthrough-hp", LOG_PID | LOG_CONS, LOG_DAEMON);
 
-
     teardown_watchog = fuse_session_start_teardown_watchdog(
-        se, fs.root.stop_timeout_secs, NULL, NULL);
-
+	se, fs.root.stop_timeout_secs, NULL, NULL);
     if (teardown_watchog == NULL)
-        goto err_out3;
+	goto err_out4;
+
+    /* required here for sync init */
+    fuse_daemonize_early_success();
 
     if (options.count("single"))
         ret = fuse_session_loop(se);
@@ -1771,6 +1902,9 @@ int main(int argc, char *argv[]) {
 
     fuse_session_unmount(se);
 
+err_out4:
+	if (fuse_daemonize_early_is_active())
+		fuse_daemonize_early_fail(ret);
 err_out3:
     fuse_remove_signal_handlers(se);
 err_out2:

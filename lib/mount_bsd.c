@@ -10,11 +10,13 @@
 
 #include "fuse_config.h"
 #include "fuse_i.h"
+#include "mount_common_i.h"
 #include "fuse_misc.h"
 #include "fuse_opt.h"
 #include "util.h"
 
 #include <sys/param.h>
+#include <sys/mount.h>
 #include "fuse_mount_compat.h"
 
 #include <sys/wait.h>
@@ -98,7 +100,7 @@ void fuse_mount_version(void)
 	system(FUSERMOUNT_PROG " --version");
 }
 
-unsigned get_max_read(struct mount_opts *o)
+unsigned int get_max_read(const struct mount_opts *o)
 {
 	return o->max_read;
 }

@@ -25,6 +25,7 @@
 #include "fuse_common.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <utime.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -2178,6 +2179,55 @@ void *fuse_req_userdata(fuse_req_t req);
 const struct fuse_ctx *fuse_req_ctx(fuse_req_t req);
 
 /**
+ * Get the number of security contexts in the request
+ *
+ * Returns the number of security contexts sent by the kernel for file
+ * creation operations when FUSE_CAP_SECURITY_CTX is enabled.
+ *
+ * With LSM stacking, multiple security modules (SELinux, AppArmor, Smack)
+ * can each contribute a context, so this can return > 1.
+ *
+ * @param req request handle
+ * @return number of security contexts (0 if none)
+ */
+uint32_t fuse_req_secctx_count(fuse_req_t req);
+
+/**
+ * Reset security context iterator to the beginning
+ *
+ * Call this to restart iteration from the first security context.
+ *
+ * @param req request handle
+ */
+void fuse_req_secctx_reset(fuse_req_t req);
+
+/**
+ * Get next security context from the request
+ *
+ * This iterates through security contexts one at a time. Each call returns
+ * the next context until all contexts have been returned.
+ *
+ * The name and value pointers remain valid for the lifetime of the request.
+ *
+ * Example:
+ *   fuse_req_secctx_reset(req);
+ *   const char *name, *value;
+ *   uint32_t value_len;
+ *   while (fuse_req_secctx_next(req, &name, &value, &value_len) == 0) {
+ *       // Process security context
+ *       setxattr(path, name, value, value_len, 0);
+ *   }
+ *
+ * @param req request handle
+ * @param name output pointer for context name (e.g., "security.selinux")
+ * @param value output pointer for context value
+ * @param value_len output pointer for context value length
+ * @return 0 on success, -ENOENT if no more contexts
+ */
+int fuse_req_secctx_next(fuse_req_t req, const char **name,
+			 const char **value, uint32_t *value_len);
+
+/**
  * Get the current supplementary group IDs for the specified request
  *
  * Similar to the getgroups(2) system call, except the return value is
@@ -2607,6 +2657,43 @@ void fuse_session_process_buf(struct fuse_session *se,
  * @return the actual size of the raw request, or -errno on error
  */
 int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf);
+
+/**
+ * Request synchronous FUSE_INIT, i.e. FUSE_INIT is handled by the
+ * kernel before mount is returned.
+ *
+ * As FUSE_INIT also starts io-uring ring threads, fork() must not be
+ * called after this if io-uring is enabled. Also see
+ * fuse_session_daemonize_start().
+ *
+ * @param se the session
+ * @param enable disable auto-detection based on fuse_daemonize_early_start,
+ *               true to forcefully enable, false to forcefully disable
+ *
+ * This must be called before fuse_session_mount() to have any effect.
+ */
+void fuse_session_set_sync_init(struct fuse_session *se, bool enable);
+
+/**
+ * Check if the connection / session is using synchronous FUSE_INIT
+ *
+ * @param conn the connection
+ * @return true if using synchronous FUSE_INIT, false otherwise
+ */
+bool fuse_conn_is_sync_init(const struct fuse_conn_info *conn);
+
+/**
+ * Enable debug output
+ *
+ * This allows to enable debug output without a command line parameter and
+ * without the enforcement of the command line parameter to run in foreground.
+ * The daemon needs to handle either fuse_log output via stderr, or
+ * redirection to its own logs or via syslog.
+ *
+ * @param se the session
+ */
+void fuse_session_set_debug(struct fuse_session *se);
+
 
 /**
  * Set a custom allocator for the payload of io-uring requests

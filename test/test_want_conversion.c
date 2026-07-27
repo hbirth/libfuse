@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <err.h>
+#include <errno.h>
 
 static void print_conn_info(const char *prefix, struct fuse_conn_info *conn)
 {
