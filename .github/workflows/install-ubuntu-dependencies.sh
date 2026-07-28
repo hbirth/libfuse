@@ -56,6 +56,7 @@ install_full() {
         gcc \
         gcc-10 \
         gcc-9 \
+        gdb \
         valgrind \
         gcc-multilib \
         g++-multilib \

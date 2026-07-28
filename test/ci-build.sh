@@ -58,6 +58,27 @@ export LSAN_OPTIONS="suppressions=$(pwd)/lsan_suppress.txt"
 export ASAN_OPTIONS="detect_leaks=1"
 export CC
 
+# One log directory per test run. $CC alone is not unique: sanitized_build runs
+# several times, all with clang, and each of those runs the suite twice. The
+# counter lives in a file, not a variable: sanitized_build and
+# non_sanitized_build are subshells, so an increment inside one would not
+# survive it.
+run_log_dir()
+{
+    local label=$1 seq
+
+    seq=$(( $(cat "${RUN_DIR}/.seq" 2>/dev/null || echo 0) + 1 ))
+    echo "${seq}" >"${RUN_DIR}/.seq"
+    printf '%s/%02d-%s' "${RUN_DIR}" "${seq}" "${label}"
+}
+
+# The root test pass writes its per-test logs as root; upload-artifact and the
+# next run both have to be able to read them.
+chown_log_dir()
+{
+    sudo chown -R "$(id -u):$(id -g)" "${RUN_DIR}"
+}
+
 log_env()
 {
     echo "=== Environment ==="
@@ -108,7 +129,7 @@ non_sanitized_build()
         sudo chown root:root util/redfsmount
         sudo chmod 4755 util/redfsmount
 
-        ${TEST_CMD}
+        FUSE_TEST_RUN_DIR="$(run_log_dir "${CC}")" ${TEST_CMD}
         popd
         rm -fr build-${CC}
         sudo rm -fr ${PREFIX_DIR}
@@ -154,12 +175,16 @@ sanitized_build()
     # meson log basename so its meson-logs/testlog.* files don't end
     # up owned by root and block the subsequent user run from writing
     # them.
-    sudo env PATH=$PATH ${TEST_CMD} --logbase=testlog-root
+    sudo env PATH=$PATH \
+        FUSE_TEST_RUN_DIR="$(run_log_dir "${CC}${VARIANT:+-$VARIANT}-root")" \
+        ${TEST_CMD} --logbase=testlog-root
+
     # Cleanup temporary files (since they are now owned by root)
     sudo rm -rf test/.pytest_cache/ test/__pycache__
+    chown_log_dir
 
-    ${TEST_CMD}
-    
+    FUSE_TEST_RUN_DIR="$(run_log_dir "${CC}${VARIANT:+-$VARIANT}")" ${TEST_CMD}
+
     popd
     rm -fr build-san
     sudo rm -fr ${PREFIX_DIR}
@@ -173,7 +198,7 @@ export CXXFLAGS="-m32"
 export LDFLAGS="-m32"
 export PKG_CONFIG_PATH="/usr/lib/i386-linux-gnu/pkgconfig"
 TEST_WITH_VALGRIND=false
-#sanitized_build
+#VARIANT=m32 sanitized_build
 unset CFLAGS
 unset CXXFLAGS
 unset LDFLAGS
@@ -191,8 +216,9 @@ sanitized_build
 # Sanitized build without libc versioned symbols
 export CC=clang
 export CXX=clang++
-sanitized_build "-Ddisable-libc-symbol-version=true"
+VARIANT=nosymver sanitized_build "-Ddisable-libc-symbol-version=true"
 
+# Build without any sanitizer
 non_sanitized_build
 
 # Documentation.
