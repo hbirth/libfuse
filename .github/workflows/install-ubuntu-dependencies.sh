@@ -112,7 +112,6 @@ install_codeql() {
     sudo apt-get install -y \
         meson \
         ninja-build \
-        python3-pytest \
         liburing-dev \
         libnuma-dev
 }
