@@ -40,3 +40,5 @@ TAGS
 /test/test_setattr
 /build/
 cppcheck_report/
+# run-tests.py output, when pointed at the source tree with --run-dir
+/fuse-tests/
