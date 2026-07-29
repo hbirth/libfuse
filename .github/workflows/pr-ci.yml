@@ -35,6 +35,24 @@ jobs:
           - san-nosymver
           - san-noiouring
           - san-m32
+        # root_pass decides whether that config also gets --root-pass; a
+        # config without a matching include entry gets an unset (falsy)
+        # matrix.root_pass. include entries must repeat the config key: an
+        # include without any of the base matrix's own keys (os here) would
+        # be folded into every combination instead of just its own.
+        include:
+          - config: gcc
+            root_pass: true
+          - config: clang
+            root_pass: true
+          - config: san
+            root_pass: true
+          - config: san-nosymver
+            root_pass: true
+          - config: san-noiouring
+            root_pass: true
+          - config: san-m32
+            root_pass: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@v5
@@ -49,6 +67,7 @@ jobs:
 
       - run: test/ci/configs.sh ${{ matrix.config }}
              --work-dir ${{ github.workspace }}/fuse-tests
+             ${{ matrix.root_pass && '--root-pass' || '' }}
 
       - name: Upload test logs
         if: always()
