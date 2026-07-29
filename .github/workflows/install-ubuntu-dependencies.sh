@@ -65,6 +65,7 @@ install_full() {
         libudev-dev:i386 \
         pkg-config:i386 \
         liburing-dev \
+        lsb-release \
         libnuma-dev \
         meson \
         ninja-build \
@@ -99,6 +100,7 @@ install_abicheck() {
         clang \
         gcc \
         liburing-dev \
+        lsb-release \
         libnuma-dev \
         meson \
         ninja-build \
@@ -113,6 +115,7 @@ install_codeql() {
         meson \
         ninja-build \
         liburing-dev \
+        lsb-release \
         libnuma-dev
 }
 
