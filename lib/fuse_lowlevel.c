@@ -19,6 +19,7 @@
 #include "util.h"
 #include "fuse_uring_i.h"
 #include "fuse_log.h"
+#include "fuse_cap_names_i.h"
 #include "fuse_daemonize_i.h"
 #include "fuse_daemonize.h"
 #if defined(__linux__)
@@ -32,6 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/eventfd.h>
 #include <stdalign.h>
 #include <string.h>
@@ -2948,6 +2951,63 @@ static bool want_flags_valid(uint64_t capable, uint64_t want)
 	return true;
 }
 
+/*
+ * Test-only: report the FUSE_INIT negotiation -- capabilities and scalars
+ * alike -- one "FUSE_INIT: FUSE_CAP_*" line per negotiated capability and one
+ * "FUSE_INIT: key=value" line per scalar. The prefix is what lets a reader
+ * pick the report out of a daemon log that carries everything else too.
+ *
+ * $FUSE_INIT_STATUS asks for it; it carries no destination, because the
+ * report goes where everything else the session logs goes. A path would be a
+ * write-anywhere gadget for any daemon that inherits its environment across a
+ * privilege boundary, and no getenv() guard makes that safe enough to be worth
+ * having. A real caller never sets the variable, so this is a no-op outside
+ * the test suite.
+ *
+ * ring_rc is passed in because a fuse_uring_start() that failed leaves no
+ * trace on the session to reconstruct it from.
+ */
+static void report_init_test_status(struct fuse_session *se, int ring_rc)
+{
+	const struct fuse_conn_info *conn = &se->conn;
+
+	if (!getenv("FUSE_INIT_STATUS"))
+		return;
+
+#define EMIT_INIT_STATUS_LINE(fmt, ...) \
+	fuse_log(FUSE_LOG_INFO, "FUSE_INIT: " fmt "\n", ##__VA_ARGS__)
+
+	for (const struct fuse_cap_name *cap = fuse_cap_names; cap->name; cap++) {
+		if (conn->want_ext & cap->flag)
+			EMIT_INIT_STATUS_LINE("%s", cap->name);
+	}
+	/* Absence from the list above does not say why, and only the session
+	 * knows: an impossible ring and a failed one are different verdicts.
+	 */
+	if (conn->want_ext & FUSE_CAP_OVER_IO_URING)
+		EMIT_INIT_STATUS_LINE("io_uring=on");
+	else if (ring_rc != 0)
+		EMIT_INIT_STATUS_LINE("io_uring=off:start_failed:%s",
+				      strerror(-ring_rc));
+	else if (se->io != NULL)
+		EMIT_INIT_STATUS_LINE("io_uring=off:custom_io");
+	else if (!se->uring.enable)
+		EMIT_INIT_STATUS_LINE("io_uring=off:disabled");
+	else
+		EMIT_INIT_STATUS_LINE("io_uring=off:not_offered");
+	EMIT_INIT_STATUS_LINE("proto_major=%u", conn->proto_major);
+	EMIT_INIT_STATUS_LINE("proto_minor=%u", conn->proto_minor);
+	EMIT_INIT_STATUS_LINE("max_readahead=%u", conn->max_readahead);
+	EMIT_INIT_STATUS_LINE("max_write=%u", conn->max_write);
+	EMIT_INIT_STATUS_LINE("max_background=%u", conn->max_background);
+	EMIT_INIT_STATUS_LINE("congestion_threshold=%u", conn->congestion_threshold);
+	EMIT_INIT_STATUS_LINE("time_gran=%u", conn->time_gran);
+	if (conn->want_ext & FUSE_CAP_PASSTHROUGH)
+		EMIT_INIT_STATUS_LINE("max_stack_depth=%u", conn->max_backing_stack_depth + 1);
+
+#undef EMIT_INIT_STATUS_LINE
+}
+
 /* Prevent bogus data races (bogus since "init" is called before
  * multi-threading becomes relevant */
 static __attribute__((no_sanitize("thread"))) void
@@ -2965,6 +3025,7 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	bool buf_reallocable = se->buf_reallocable;
 	(void) nodeid;
 	bool enable_io_uring = false;
+	int ring_rc = 0;
 
 	if (se->debug) {
 		fuse_log(FUSE_LOG_DEBUG, "INIT: %u.%u\n", arg->major, arg->minor);
@@ -3300,8 +3361,6 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	else if (arg->minor < 23)
 		outargsize = FUSE_COMPAT_22_INIT_OUT_SIZE;
 
-
-
 	if (inargflags & FUSE_INIT_EXT) {
 		outargflags |= FUSE_INIT_EXT;
 		outarg.flags2 = outargflags >> 32;
@@ -3318,8 +3377,11 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	fuse_daemonize_set_got_init();
 	send_reply_ok(req, &outarg, outargsize);
 
+	/* XXX: Add an option to make non-available io-uring fatal */
 	if (enable_io_uring)
-		fuse_uring_start(se);
+		ring_rc = fuse_uring_start(se);
+
+	report_init_test_status(se, ring_rc);
 
 	/*
 	 * With sync init the daemon needs to signal success after the mount
