@@ -24,3 +24,6 @@ option('disable-libc-symbol-version', type : 'boolean', value : false,
 
 option('enable-usdt', type : 'boolean', value : false,
        description: 'Enable user statically defined tracepoints for extra observability')
+
+option('sync-init', type: 'combo', choices: ['auto', 'always', 'never'], value: 'auto',
+       description: 'Synchronous FUSE_INIT: auto follows fuse_daemonize_early_start(), always and never override it')
