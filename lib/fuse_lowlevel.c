@@ -3381,6 +3381,12 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	if (enable_io_uring)
 		ring_rc = fuse_uring_start(se);
 
+	/* Once the reply is composed want_ext is the negotiation result, not a
+	 * wish list; io-uring is the only capability that can still be off.
+	 */
+	if (!enable_io_uring || ring_rc != 0)
+		fuse_unset_feature_flag(&se->conn, FUSE_CAP_OVER_IO_URING);
+
 	report_init_test_status(se, ring_rc);
 
 	/*
