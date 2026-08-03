@@ -14,5 +14,8 @@ IGNORES="${IGNORES},PREFER_ATTRIBUTE_ALWAYS_UNUSED,PREFER_DEFINED_ATTRIBUTE_MACR
 # checkpatch is a C/kernel-style checker; a YAML key like "cc:" reads as a
 # malformed Signed-off-by/Cc trailer to its BAD_SIGN_OFF check, so YAML is
 # kept out of the diff it sees rather than silencing that check.
-git format-patch -1 --stdout "$commit" -- . ':!*.yml' ':!*.yaml' |
+# -c diff.algorithm=default: histogram (a common user gitconfig default)
+# aligns some hunks differently than myers, which can turn an unrelated
+# pre-existing line into a "+" line or vice versa; pin so local runs match CI.
+git -c diff.algorithm=default format-patch -1 --stdout "$commit" -- . ':!*.yml' ':!*.yaml' |
     ./checkpatch.pl --max-line-length=100 --no-tree --ignore ${IGNORES} -
