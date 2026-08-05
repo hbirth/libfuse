@@ -44,9 +44,13 @@ jobs:
           - clang-san-root
           # - clang-san-io-uring
           - clang-san-nosymver
-          - clang-san-noiouring
+          # This tree has no -Denable-io-uring, so liburing and libnuma are
+          # required whenever liburing.h is present. That rules out the build
+          # without the transport, and with it the 32-bit one: the header is
+          # found but the i386 libraries are not installed.
+          # - clang-san-noiouring
           - clang-san-nosyncinit
-          - clang-san-m32
+          # - clang-san-m32
         # include entries must repeat the config key: an include naming none
         # of the base matrix's own keys would be folded into every
         # combination instead of just its own.
@@ -97,12 +101,12 @@ jobs:
             sanitize: true
             meson_opts:
               - -Ddisable-libc-symbol-version=true
-          - config: clang-san-noiouring
-            cc: clang
-            cxx: clang++
-            sanitize: true
-            meson_opts:
-              - -Denable-io-uring=false
+          # - config: clang-san-noiouring
+          #   cc: clang
+          #   cxx: clang++
+          #   sanitize: true
+          #   meson_opts:
+          #     - -Denable-io-uring=false
           # The daemons a test backgrounds get synchronous FUSE_INIT
           # everywhere else, so this is the only job running the classic path.
           - config: clang-san-nosyncinit
@@ -111,16 +115,16 @@ jobs:
             sanitize: true
             meson_opts:
               - -Dsync-init=never
-          - config: clang-san-m32
-            cc: clang
-            cxx: clang++
-            sanitize: true
-            meson_opts:
-              - -Dc_args=-m32
-              - -Dcpp_args=-m32
-              - -Dc_link_args=-m32
-              - -Dcpp_link_args=-m32
-              - --pkg-config-path=/usr/lib/i386-linux-gnu/pkgconfig
+          # - config: clang-san-m32
+          #   cc: clang
+          #   cxx: clang++
+          #   sanitize: true
+          #   meson_opts:
+          #     - -Dc_args=-m32
+          #     - -Dcpp_args=-m32
+          #     - -Dc_link_args=-m32
+          #     - -Dcpp_link_args=-m32
+          #     - --pkg-config-path=/usr/lib/i386-linux-gnu/pkgconfig
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@v5
