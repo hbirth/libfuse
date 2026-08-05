@@ -34,7 +34,7 @@
 
 #include "fuse_mount_compat.h"
 
-#define FUSERMOUNT_PROG		"fusermount3"
+#define FUSERMOUNT_PROG		"redfsmount"
 #define FUSE_COMMFD_ENV		"_FUSE_COMMFD"
 #define FUSE_COMMFD2_ENV	"_FUSE_COMMFD2"
 #define ARG_FD_ENTRY_SIZE	30
@@ -356,7 +356,7 @@ static int setup_auto_unmount(const char *mountpoint, int quiet)
 	// passed to child now, so can close here.
 	close(fds[0]);
 
-	// Now fusermount3 will only exit when fds[1] closes automatically when our
+	// Now redfsmount will only exit when fds[1] closes automatically when our
 	// process exits.
 	return 0;
 	// Note: fds[1] is leakend and doesn't get FD_CLOEXEC
@@ -429,7 +429,7 @@ static int fuse_mount_fusermount(const char *mountpoint, const struct mount_opts
 	int fd = receive_fd(fds[1]);
 
 	if (!mo->auto_unmount) {
-		/* with auto_unmount option fusermount3 will not exit until
+		/* with auto_unmount option redfsmount will not exit until
 		   this socket is closed */
 		close(fds[1]);
 		waitpid(pid, NULL, 0); /* bury zombie */
@@ -442,11 +442,11 @@ static int fuse_mount_fusermount(const char *mountpoint, const struct mount_opts
 }
 
 /*
- * Mount using fusermount3 with --sync-init flag for bidirectional fd exchange
+ * Mount using redfsmount with --sync-init flag for bidirectional fd exchange
  * Used by new mount API when privileged mount fails with EPERM
  *
  * Returns: fd of /dev/fuse opened by fusermount on success, -1 on failure
- * On success, *sock_fd_out contains the socket fd for signaling fusermount3
+ * On success, *sock_fd_out contains the socket fd for signaling redfsmount
  */
 int mount_fusermount_obtain_fd(const char *mountpoint, struct mount_opts *mo,
 			       const char *opts, int *sock_fd_out,
@@ -517,7 +517,7 @@ int mount_fusermount_obtain_fd(const char *mountpoint, struct mount_opts *mo,
 }
 
 /*
- * Send proceed signal to fusermount3 and wait for mount result
+ * Send proceed signal to redfsmount and wait for mount result
  * Returns: 0 on success, -1 on failure
  */
 int fuse_fusermount_proceed_mnt(int sock_fd)
@@ -536,7 +536,7 @@ int fuse_fusermount_proceed_mnt(int sock_fd)
 		return -1;
 	}
 
-	/* Wait for mount result from fusermount3 (4-byte error code) */
+	/* Wait for mount result from redfsmount (4-byte error code) */
 	int32_t status;
 
 	do {
@@ -545,7 +545,8 @@ int fuse_fusermount_proceed_mnt(int sock_fd)
 
 	if (res != sizeof(status)) {
 		if (res == 0)
-			fuse_log(FUSE_LOG_ERR, "fuse: fusermount3 closed connection\n");
+			fuse_log(FUSE_LOG_ERR, "fuse: %s closed connection\n",
+				 FUSERMOUNT_PROG);
 		else
 			fuse_log(FUSE_LOG_ERR, "fuse: failed to receive mount status: %s\n",
 				 strerror(errno));
@@ -554,8 +555,8 @@ int fuse_fusermount_proceed_mnt(int sock_fd)
 
 	if (status != 0) {
 		if (status != -EPERM)
-			fuse_log(FUSE_LOG_ERR, "fuse: fusermount3 mount failed: %s\n",
-				 strerror(-status));
+			fuse_log(FUSE_LOG_ERR, "fuse: %s mount failed: %s\n",
+				 FUSERMOUNT_PROG, strerror(-status));
 		return -1;
 	}
 
@@ -706,7 +707,7 @@ int fuse_kern_do_mount(const char *mnt, struct mount_opts *mo,
 	if (res == -1) {
 		/*
 		 * Maybe kernel doesn't support unprivileged mounts, in this
-		 * case try falling back to fusermount3
+		 * case try falling back to redfsmount
 		 */
 		if (errno == EPERM) {
 			res = FUSE_MOUNT_FALLBACK_NEEDED;
