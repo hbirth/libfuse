@@ -5148,7 +5148,7 @@ static int session_wait_sync_init_completion(struct fuse_session *se)
 }
 
 /*
- * Handle fallback to fusermount3 when privileged mount fails with EPERM.
+ * Handle fallback to redfsmount when privileged mount fails with EPERM.
  * Returns: new fd on success, negative error code on failure
  */
 static int new_api_fusermount(struct fuse_session *se,
@@ -5161,22 +5161,22 @@ static int new_api_fusermount(struct fuse_session *se,
 
 	if (se->debug)
 		fuse_log(FUSE_LOG_DEBUG,
-			 "fuse: privileged mount failed with EPERM, falling back to fusermount3\n");
+			 "fuse: privileged mount failed with EPERM, falling back to redfsmount\n");
 
 	/* Terminate worker thread with wrong fd */
 	if (session_wait_sync_init_completion(se) < 0)
 		fuse_log(FUSE_LOG_ERR, "fuse: sync init completion failed\n");
 
-	/* Call fusermount3 with --sync-init */
+	/* Call redfsmount with --sync-init */
 	fd = mount_fusermount_obtain_fd(mountpoint, se->mo, mtab_opts, sock_fd,
 					fusermount_pid);
 	if (fd < 0) {
 		fuse_log(FUSE_LOG_ERR,
-			 "fuse: fusermount3 sync-init failed\n");
+			 "fuse: redfsmount sync-init failed\n");
 		return -ENOTSUP;
 	}
 
-	/* Start worker thread with correct fd from fusermount3 */
+	/* Start worker thread with correct fd from redfsmount */
 	se->fd = fd;
 	err = session_start_sync_init(se, fd, is_sync_init);
 	if (err) {
@@ -5246,7 +5246,7 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 	/* Try to mount directly */
 	err = fuse_kern_fsmount_mo(mountpoint, se->mo, mtab_opts_with_fd);
 
-	/* If mount failed with EPERM, fall back to fusermount3 with sync-init */
+	/* If mount failed with EPERM, fall back to redfsmount with sync-init */
 	if (err < 0 && errno == EPERM) {
 		char *fusermount_opts = NULL;
 
@@ -5255,7 +5255,7 @@ static int fuse_session_mount_new_api(struct fuse_session *se,
 		se->fd = -1;
 
 		/*
-		 * fusermount3 receives fsname/subtype (and other fusermount
+		 * redfsmount receives fsname/subtype (and other fusermount
 		 * options) only via -o, so mirror the legacy fuse_kern_mount()
 		 * fallback here. mtab_opts carries just the kernel/mtab options;
 		 * without appending these the subtype/fsname is lost and the
@@ -5291,7 +5291,7 @@ err_with_sock:
 	if (sock_fd >= 0) {
 		if (err == 0 && se->mo->auto_unmount) {
 			/*
-			 * Under auto_unmount fusermount3 --sync-init stays alive
+			 * Under auto_unmount redfsmount --sync-init stays alive
 			 * until this socket closes (its unmount trigger), so
 			 * closing it now would unmount early and waitpid() would
 			 * hang. Keep it; fuse_session_destroy() closes it.
@@ -5299,7 +5299,7 @@ err_with_sock:
 			se->auto_unmount_fd = sock_fd;
 		} else {
 			close(sock_fd);
-			/* Reap fusermount3 child process to prevent zombie */
+			/* Reap redfsmount child process to prevent zombie */
 			if (fusermount_pid > 0)
 				waitpid(fusermount_pid, NULL, 0);
 		}
