@@ -147,10 +147,7 @@ ninja
 sudo env PATH="$PATH" ninja install
 
 # libfuse will first try the install path and then system defaults.
-sudo chmod 4755 "${PREFIX_DIR}/bin/fusermount3"
-if [ -x "${PREFIX_DIR}/sbin/fuservicemount3" ]; then
-    sudo chmod 4755 "${PREFIX_DIR}/sbin/fuservicemount3"
-fi
+sudo chmod 4755 "${PREFIX_DIR}/bin/redfsmount"
 
 restore_io_uring()
 {

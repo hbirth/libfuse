@@ -46,7 +46,7 @@ LAUNCH_FAILED_MARKER = 'run-tests: containment failed'
 
 # util/install_helper.sh installs exactly these setuid; nothing else in util/
 # needs the bit.
-SETUID_HELPERS = ('fusermount3', 'fuservicemount3')
+SETUID_HELPERS = ('redfsmount',)
 
 GDB_TIMEOUT = 120.0             # gdb can wedge on a huge core or absent symbols
 GDB_TOP_FRAMES = 12             # frames inlined into the summary
@@ -263,7 +263,7 @@ def setuid_helpers(build_dir: Path) -> None:
     sudo = [] if os.geteuid() == 0 else ['sudo']
     for name in SETUID_HELPERS:
         helper = build_dir / 'util' / name
-        if not helper.exists():   # fuservicemount3 is not always built
+        if not helper.exists():   # util/ is not built everywhere
             continue
         info = helper.stat()
         if info.st_uid == 0 and info.st_mode & stat.S_ISUID:
@@ -278,7 +278,7 @@ class CgroupManager:
     """A cgroup-v2 tree for the run, one leaf per test.
 
     The launcher puts itself into its leaf before it execs the test, so each
-    descendant the script spawns -- the fs daemon, fusermount3, anything a
+    descendant the script spawns -- the fs daemon, redfsmount, anything a
     helper backgrounds -- inherits it. Writing "1" to the leaf's cgroup.kill
     reaps the whole subtree atomically, which is the only reliable way to stop
     a wedged FUSE daemon that has already been reparented to init.
@@ -740,7 +740,7 @@ class TestRunner:
         })
         if self.io_uring_depth is not None:
             env['FUSE_URING_QUEUE_DEPTH'] = str(self.io_uring_depth)
-        # $FUSE_UTIL_DIR first: an installed fusermount3 older than the build
+        # $FUSE_UTIL_DIR first: an installed redfsmount older than the build
         # tree makes printcap emit "unrecognized option '--sync-init'", which
         # is both wrong and would trip the output scanner.
         env['PATH'] = os.pathsep.join(
@@ -1487,7 +1487,7 @@ def parse_args(argv: list) -> argparse.Namespace:
                         help='meson build root (default: .)')
     parser.add_argument('--setuid-helpers', action='store_true',
                         help="chown root:root + chmod 4755 the build tree's "
-                             'fusermount3 (needs sudo); without it an '
+                             'redfsmount (needs sudo); without it an '
                              'unprivileged run skips every mounting test')
     parser.add_argument('--run-dir', default=None,
                         help='where to write per-test output, verbatim')

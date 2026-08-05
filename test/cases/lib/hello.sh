@@ -25,14 +25,14 @@ direct)
 	fuse_mount "$FS_NAME" $FS_EXTRA ${FS_OPTS:+-o "$FS_OPTS"} >/dev/null
 	;;
 mount_fuse)
-	# util/ is not built on BSD, so there is no mount.fuse3 to invoke.
-	_require_linux "mount.fuse3"
+	# util/ is not built on BSD, so there is no mount.redfs to invoke.
+	_require_linux "mount.redfs"
 	fuse_mount_helper "$FS_NAME" ${FS_OPTS:+-o "$FS_OPTS"} >/dev/null
 	;;
 mount_fuse_dropcaps)
-	_require_linux "mount.fuse3"
+	_require_linux "mount.redfs"
 	_require_root
-	# mount.fuse3 execs the fs only after dropping all capabilities, so
+	# mount.redfs execs the fs only after dropping all capabilities, so
 	# every directory on the way to the binary must be traversable by
 	# plain permission bits - a mode-0700 home is not.
 	_require_reachable_without_caps "$FS_NAME"

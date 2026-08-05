@@ -749,7 +749,7 @@ def cmd_printcap_caps(src_root):
 def cmd_reachable_without_caps(path):
     """Exit 0 when *path* is reachable by a process without CAP_DAC_OVERRIDE.
 
-    mount.fuse3 execs the fs binary only after dropping all capabilities; the
+    mount.redfs execs the fs binary only after dropping all capabilities; the
     process keeps uid/gid 0 but loses CAP_DAC_OVERRIDE, so the binary and every
     directory on the way to it must be executable for it by plain permission
     bits (a user-owned mode-0700 home directory is not).

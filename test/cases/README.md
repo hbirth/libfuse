@@ -42,7 +42,7 @@ meson test -C build            (two entries: fuse-tests, fuse-tests-io-uring)
                                           -> fuse_wait_mount
                                           -> _fuse_assert_uring
                                      -> _check <op>  -> python3 cases/lib/checks.py
-                                     -> fuse_umount  -> fusermount3 -u
+                                     -> fuse_umount  -> redfsmount -u
                       -> _stream()        ..> logs/script.out, logs/timestamps.out
                       -- timeout?  -> dump_stacks() ..> ps.txt kstack.N.txt gdbstack.N.txt
                                    -> _kill()       ..> <leaf>/cgroup.kill
@@ -182,7 +182,7 @@ _require_fs_marker_absent <regex> [fs-index]
 ```
 
 Sourcing `common.sh` also gates the case on FUSE being usable at all — the
-module loaded, and a setuid `fusermount3` when you are not root — because
+module loaded, and a setuid `redfsmount` when you are not root — because
 every case that mounts needs both. A case that never mounts says so *before*
 sourcing, and runs anyway:
 
@@ -196,7 +196,7 @@ _fuse_no_mount_needed=1
 ```sh
 fuse_mount <fs-name> [args...]          # $TEST_MNT, foreground (-f)
 fuse_mount_at <mnt> <fs-name> [args...] # explicit mountpoint, no -f
-fuse_mount_helper <fs-name> [args...]   # via mount.fuse3
+fuse_mount_helper <fs-name> [args...]   # via mount.redfs
 fuse_umount [idx]                       # and require the daemon to exit 0
 fuse_umount_lazy [idx]                  # the give-up path; the trap uses it
 fuse_wait_mount <path> [predicate]
@@ -219,7 +219,7 @@ attached to `logs/fs-N-*.out`.
 
 That leaves the backgrounded path — `fuse_daemonize_early_start()`, the parent
 waiting for the mount, `stdout`/`stderr` closed once FUSE_INIT is answered —
-covered only by the `mount.fuse3` cases, which is where synchronous FUSE_INIT
+covered only by the `mount.redfs` cases, which is where synchronous FUSE_INIT
 is reached as well. Covering it properly needs foreground and background
 variants of the existing cases; that has not been done.
 
@@ -401,7 +401,7 @@ Where the output lands:
 Without `--run-dir`, a run gets a `run-<user>-<timestamp>-<pid>` leaf under the
 base, and the leaf is deleted when nothing failed.
 
-Unprivileged, without a setuid `fusermount3`, everything that mounts skips
+Unprivileged, without a setuid `redfsmount`, everything that mounts skips
 itself. `--setuid-helpers` makes the build tree's helpers setuid root (with
 `sudo`) before the run; it is a no-op once they are.
 
@@ -412,7 +412,7 @@ test; `-X <name>` adds to it for one run.
 match. A valgrind finding fails the test through the daemon's exit status
 (`--error-exitcode=99`), with the report sitting in that daemon's own log;
 valgrind's `==pid==` lines are stripped before the suspicious-output scan.
-`fusermount3` is traced only when the test runs as root, because it is setuid,
+`redfsmount` is traced only when the test runs as root, because it is setuid,
 and the give-up umount on the failure path is not traced at all.
 
 ## Running them over fuse-io-uring
@@ -439,7 +439,7 @@ have printed `FUSE_INIT: io_uring=on` on its stderr.
 
 That last line is the session's own account of its transport, and every daemon
 the suite starts has its stderr captured, so it covers the ones a mount verb
-never started too — `mount.fuse3`, the self-mounting C tests, a daemon a script
+never started too — `mount.redfs`, the self-mounting C tests, a daemon a script
 launched itself:
 
 ```text

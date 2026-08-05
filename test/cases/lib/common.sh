@@ -22,7 +22,7 @@
 #   BUILD_DIR		build tree root; _require_binary resolves against it
 #   FUSE_EXAMPLE_DIR	$BUILD_DIR/example
 #   FUSE_TEST_BIN_DIR	$BUILD_DIR/test
-#   FUSE_UTIL_DIR	$BUILD_DIR/util, holding fusermount3 and mount.fuse3
+#   FUSE_UTIL_DIR	$BUILD_DIR/util, holding redfsmount and mount.redfs
 #   FUSE_CAPS		capability names printcap reported, space separated
 #   FUSE_UID		effective uid
 #   FUSE_OS		uname -s
@@ -113,20 +113,20 @@ _require_cap()
 
 # _require_fuse
 # _notrun unless this user can mount a FUSE filesystem at all: the kernel side
-# has to be there, and an unprivileged user needs a setuid fusermount3. It runs
-# when a case sources this file, so a build tree whose fusermount3 was never
+# has to be there, and an unprivileged user needs a setuid redfsmount. It runs
+# when a case sources this file, so a build tree whose redfsmount was never
 # chmod 4755'd reports skips rather than a wall of mount failures.
 _require_fuse()
 {
 	local fusermount
 
-	# BSD has no fusermount3 at all; vfs.usermount decides there.
+	# BSD has no redfsmount at all; vfs.usermount decides there.
 	_is_linux || return 0
 	[ -e /dev/fuse ] ||
 		_notrun "the FUSE kernel module does not seem to be loaded"
 	[ "$FUSE_UID" != 0 ] || return 0
-	fusermount=$(command -v fusermount3) ||
-		_notrun "no fusermount3 on \$PATH"
+	fusermount=$(command -v redfsmount) ||
+		_notrun "no redfsmount on \$PATH"
 	[ -u "$fusermount" ] ||
 		_notrun "$fusermount is not setuid, and we are not root"
 }
@@ -159,7 +159,7 @@ _require_not_32bit_on_64()
 
 # _require_reachable_without_caps <fs-name>
 # _notrun unless the fs binary and every directory above it are executable by
-# plain permission bits. mount.fuse3 -o drop_privileges execs the fs after
+# plain permission bits. mount.redfs -o drop_privileges execs the fs after
 # dropping CAP_DAC_OVERRIDE, so a mode-0700 home makes it unreachable.
 _require_reachable_without_caps()
 {
@@ -419,9 +419,9 @@ fuse_mount()
 }
 
 # fuse_mount_helper <fs-name> [args...]
-# Mount via $FUSE_UTIL_DIR/mount.fuse3 instead of exec'ing the fs directly.
+# Mount via $FUSE_UTIL_DIR/mount.redfs instead of exec'ing the fs directly.
 #
-# mount.fuse3 execs the filesystem type through /bin/sh, so an example resolves
+# mount.redfs execs the filesystem type through /bin/sh, so an example resolves
 # via $PATH but a binary in test/ has to be named by its absolute path.
 fuse_mount_helper()
 {
@@ -433,10 +433,10 @@ fuse_mount_helper()
 	test/*) spec=$(_fuse_fs_binary "$fs") ;;
 	esac
 
-	# The daemon mount.fuse3 execs inherits the runner's environment, so its
+	# The daemon mount.redfs execs inherits the runner's environment, so its
 	# FUSE_INIT report lands here and is checked like a direct mount's.
 	log=$TEST_LOGDIR/fs-$idx-$(basename "$fs").out
-	$FUSE_VALGRIND "$FUSE_UTIL_DIR/mount.fuse3" "$spec" "$TEST_MNT" "$@" \
+	$FUSE_VALGRIND "$FUSE_UTIL_DIR/mount.redfs" "$spec" "$TEST_MNT" "$@" \
 		>"$log" 2>&1 &
 	FUSE_FS_PID[$idx]=$!
 	FUSE_FS_LOG[$idx]=$log
@@ -447,7 +447,7 @@ fuse_mount_helper()
 	trap _fuse_cleanup_all EXIT
 	fuse_wait_mount "$TEST_MNT" || {
 		_fuse_dump_fs_log $idx
-		_fail "mount.fuse3 $fs did not mount on $TEST_MNT"
+		_fail "mount.redfs $fs did not mount on $TEST_MNT"
 	}
 	_fuse_assert_uring $idx
 	echo $idx
@@ -476,7 +476,7 @@ fuse_wait_mount()
 		fi
 		if ! kill -0 "${FUSE_FS_PID[$idx]}" 2>/dev/null; then
 			# The daemon may have exited *after* completing the
-			# mount (mount.fuse3 does), so look once more.
+			# mount (mount.redfs does), so look once more.
 			eval "$test_cmd" >/dev/null 2>&1 && return 0
 			return 1
 		fi
@@ -486,7 +486,7 @@ fuse_wait_mount()
 }
 
 # fuse_umount [idx]
-# fusermount3 -u on Linux, umount(8) on BSD (no util/ is built there), then
+# redfsmount -u on Linux, umount(8) on BSD (no util/ is built there), then
 # wait for the daemon; _fail unless it exits 0. Writes
 # logs/fs-<idx>-<name>.status.
 fuse_umount()
@@ -497,13 +497,13 @@ fuse_umount()
 
 	if _is_linux; then
 		local vg=
-		# fusermount3 is setuid root, so valgrind can only trace it
+		# redfsmount is setuid root, so valgrind can only trace it
 		# when the test itself runs as root.
 		if [ "$FUSE_UID" = 0 ]; then
 			vg=$FUSE_VALGRIND
 		fi
-		$vg "$FUSE_UTIL_DIR/fusermount3" -u "$mnt" ||
-			_fail "fusermount3 -u $mnt failed"
+		$vg "$FUSE_UTIL_DIR/redfsmount" -u "$mnt" ||
+			_fail "redfsmount -u $mnt failed"
 	else
 		umount "$mnt" || _fail "umount $mnt failed"
 	fi
@@ -526,7 +526,7 @@ fuse_umount()
 }
 
 # fuse_umount_lazy [idx]
-# fusermount3 -z -u (Linux) or umount -f (BSD), + SIGTERM + SIGKILL, ignoring
+# redfsmount -z -u (Linux) or umount -f (BSD), + SIGTERM + SIGKILL, ignoring
 # errors. The trap path.
 fuse_umount_lazy()
 {
@@ -538,7 +538,7 @@ fuse_umount_lazy()
 	# The give-up path is not traced: a valgrind report from a teardown
 	# that is already failing is noise.
 	if _is_linux; then
-		"$FUSE_UTIL_DIR/fusermount3" -z -u "$mnt" >/dev/null 2>&1 || true
+		"$FUSE_UTIL_DIR/redfsmount" -z -u "$mnt" >/dev/null 2>&1 || true
 	else
 		umount -f "$mnt" >/dev/null 2>&1 || true
 	fi
