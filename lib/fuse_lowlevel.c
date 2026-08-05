@@ -1741,7 +1741,7 @@ static void _do_setattr(fuse_req_t req, const fuse_ino_t nodeid,
 			 FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME |
 			 FUSE_SET_ATTR_KILL_SUID | FUSE_SET_ATTR_KILL_SGID |
 			 FUSE_SET_ATTR_ATIME_NOW | FUSE_SET_ATTR_MTIME_NOW |
-			 FUSE_SET_ATTR_CTIME;
+			 FUSE_SET_ATTR_CTIME | FUSE_SET_ATTR_WRITEBACK;
 
 		req->se->op.setattr(req, nodeid, &stbuf, valid, fi);
 	} else

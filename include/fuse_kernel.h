@@ -359,6 +359,17 @@ struct fuse_file_lock {
 #define FATTR_LOCKOWNER	(1 << 9)
 #define FATTR_CTIME	(1 << 10)
 #define FATTR_KILL_SUIDGID	(1 << 11)
+/*
+ * Not an attribute selector: marks the request as a kernel-initiated
+ * writeback of locally owned attributes rather than a userspace-initiated
+ * change.  Only sent by kernels that support it.
+ *
+ * The bit is deliberately far above the sequentially allocated FATTR_*
+ * range: libfuse mirrors these bits into its own FUSE_SET_ATTR_* space,
+ * which has its own allocations from bit 12 upwards, and only a value that
+ * is free on both sides can be passed through without translation.
+ */
+#define FATTR_WRITEBACK		(1 << 30)
 
 /**
  * Flags returned by the OPEN request

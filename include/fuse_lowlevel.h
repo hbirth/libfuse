@@ -172,6 +172,14 @@ enum fuse_notify_entry_flags {
 #define FUSE_SET_ATTR_OPEN	(1 << 15)
 #define FUSE_SET_ATTR_TIMES_SET	(1 << 16)
 #define FUSE_SET_ATTR_TOUCH	(1 << 17)
+/*
+ * Not an attribute selector: the request is the kernel writing back
+ * attributes it owns locally, not a userspace-initiated change.  Only set
+ * by kernels that support it.  Shares the value of the FATTR_WRITEBACK
+ * wire bit, so it needs no translation - keep the two in sync when
+ * changing either.
+ */
+#define FUSE_SET_ATTR_WRITEBACK	(1 << 30)
 
 /**
  * Type of the dlm lock requested
@@ -371,6 +379,12 @@ struct fuse_lowlevel_ops {
 	 * if writeback caching is active. It is the filesystem's responsibility to update
 	 * these timestamps when needed, and (if desired) to implement mount options like
 	 * `noatime` or `relatime`.
+	 *
+	 * On kernels that support it, 'to_set' carries
+	 * FUSE_SET_ATTR_WRITEBACK when the request comes from the kernel
+	 * writing back attributes it owns locally (the mtime and ctime of
+	 * the writeback cache) rather than from an explicit userspace
+	 * change such as utimensat().
 	 *
 	 * If the setattr was invoked from the ftruncate() system call
 	 * under Linux kernel versions 2.6.15 or later, the fi->fh will
