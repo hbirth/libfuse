@@ -1436,6 +1436,16 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 	struct fuse_compound_out *out_hdr =
 		(struct fuse_compound_out *)req->compound.out_buffer;
 
+	/* Nothing to write the results into: either this request never had a
+	 * compound context, or it no longer has one. Releasing the context and
+	 * sending the reply always happen together, so a request that has lost
+	 * the one has been handed off with the other - return without touching
+	 * it, an error reply here would be a second reply.
+	 * fuse_compound_prepare_result() rejects the same shape.
+	 */
+	if (out_hdr == NULL)
+		return -EINVAL;
+
 	if (count == 0 || count > FUSE_MAX_COMPOUND_OPS) {
 		return fuse_reply_err(req, EINVAL);
 	}
