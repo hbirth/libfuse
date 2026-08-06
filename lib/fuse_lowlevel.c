@@ -393,6 +393,17 @@ int fuse_compound_prepare_result(fuse_req_t req, int error, const void *arg,
 	void *result_dest;
 	struct fuse_out_header out_hdr = {0};
 
+	if (req->compound.out_buffer == NULL) {
+		/* No (longer a) compound context to collect into. Return
+		 * rather than join the out: path, which would signal a
+		 * condition variable that was never initialised, or that
+		 * releasing the context has already destroyed. Nothing is
+		 * waiting on it either way: only execute_compound() waits,
+		 * and it runs with a live context.
+		 */
+		return -EINVAL;
+	}
+
 	if (req->compound.result_count == req->compound.input_count) {
 		/* called one time too many */
 		res = -EINVAL;
