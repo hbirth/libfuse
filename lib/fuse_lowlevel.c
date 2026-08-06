@@ -1446,6 +1446,13 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 	if (out_hdr == NULL)
 		return -EINVAL;
 
+	/* The compound ends here, so the request must stop collecting into it:
+	 * send_reply() routes a request that is still marked compound back into
+	 * fuse_compound_prepare_result() instead of sending it. Cleared for
+	 * every exit below, the error ones included.
+	 */
+	req->is_compound = false;
+
 	if (count == 0 || count > FUSE_MAX_COMPOUND_OPS) {
 		return fuse_reply_err(req, EINVAL);
 	}
@@ -1491,16 +1498,16 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 	result_size = req->compound.result_size;
 	out_buffer = compound_ctx_detach(req);
 
-	if (req->is_uring) {
-		ret = send_reply_uring(req, error, out_buffer, result_size);
-	} else if (error == 0) {
-		ret = send_reply_ok(req, out_buffer, result_size);
-	} else {
-		/* the context is already gone, fuse_reply_err() only replies.
-		 * It negates the error, compound.error is stored negated.
-		 */
-		ret = fuse_reply_err(req, -error);
-	}
+	/* An error reply carries no payload on either transport: the kernel
+	 * rejects a /dev/fuse reply longer than its header once out.error is
+	 * set, and ignores the ring payload in the same case. compound.error is
+	 * already stored the way the wire wants it, negated, so it goes to
+	 * send_reply() as it is.
+	 */
+	if (error)
+		ret = send_reply(req, error, NULL, 0);
+	else
+		ret = send_reply(req, 0, out_buffer, result_size);
 
 	free(out_buffer);
 
