@@ -102,6 +102,7 @@ static size_t pagesize;
 
 /* Forward declaration */
 static void compound_ctx_cleanup(struct fuse_req *req);
+static struct fuse_compound_result *compound_ctx_detach(struct fuse_req *req);
 
 static __attribute__((constructor)) void fuse_ll_init_pagesize(void)
 {
@@ -552,15 +553,19 @@ static int send_reply_ok(fuse_req_t req, const void *arg, size_t argsize)
 
 int fuse_reply_err(fuse_req_t req, int err)
 {
-	int ret = send_reply(req, -err, NULL, 0);
-
-	/* If this was called for a compound request that has been initialized,
-	 * clean up the compound context. Check out_buffer to detect this. */
-	if (req->compound.out_buffer != NULL) {
+	/* send_reply() hands the request off - it is freed on the legacy path
+	 * and handed back to the kernel on the uring path - so the request may
+	 * not be touched afterwards. Do the cleanup before replying.
+	 *
+	 * An operation running inside a compound only records its error here,
+	 * the context stays alive until the compound itself is replied to.
+	 * Everything else that has an initialized context (detected via
+	 * out_buffer) owns it and has to release it now.
+	 */
+	if (!req->is_compound && req->compound.out_buffer != NULL)
 		compound_ctx_cleanup(req);
-	}
 
-	return ret;
+	return send_reply(req, -err, NULL, 0);
 }
 
 void fuse_reply_none(fuse_req_t req)
@@ -1423,6 +1428,9 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 			const void *results, size_t results_size)
 {
 	int ret;
+	int error;
+	size_t result_size;
+	struct fuse_compound_result *out_buffer;
 
 	/* note that we have left space for the header in the initialization */
 	struct fuse_compound_out *out_hdr =
@@ -1462,22 +1470,29 @@ int fuse_reply_compound(fuse_req_t req, uint32_t count,
 		req->compound.result_size += results_size;
 	}
 
+	/*
+	 * Sending the reply hands the request off - it is freed on the legacy
+	 * path and given back to the kernel on the uring path - so the compound
+	 * context has to be released before that. The output buffer is still
+	 * needed as the payload of that very reply, so it is kept alive here
+	 * and freed once the reply is out.
+	 */
+	error = req->compound.error;
+	result_size = req->compound.result_size;
+	out_buffer = compound_ctx_detach(req);
+
 	if (req->is_uring) {
-		ret = send_reply_uring(req, req->compound.error, req->compound.out_buffer,
-				req->compound.result_size);
-		/* Clean up compound context after sending reply */
-		compound_ctx_cleanup(req);
+		ret = send_reply_uring(req, error, out_buffer, result_size);
+	} else if (error == 0) {
+		ret = send_reply_ok(req, out_buffer, result_size);
 	} else {
-		if (req->compound.error == 0) {
-			ret = send_reply_ok(req, req->compound.out_buffer,
-				req->compound.result_size);
-			/* Clean up compound context after sending reply */
-			compound_ctx_cleanup(req);
-		} else {
-			/* fuse_reply_err() will handle cleanup for us */
-			ret = fuse_reply_err(req, req->compound.error);
-		}
+		/* the context is already gone, fuse_reply_err() only replies.
+		 * It negates the error, compound.error is stored negated.
+		 */
+		ret = fuse_reply_err(req, -error);
 	}
+
+	free(out_buffer);
 
 	return ret;
 }
@@ -1522,17 +1537,29 @@ static int compound_ctx_init(fuse_req_t req,
 	return 0;
 }
 
-static void compound_ctx_cleanup(fuse_req_t req)
+/*
+ * Release the compound context, but hand the output buffer over to the
+ * caller instead of freeing it. Used when the buffer is still needed as
+ * the payload of the reply that is about to be sent - the request itself
+ * must not be touched once the reply is out.
+ */
+static struct fuse_compound_result *compound_ctx_detach(fuse_req_t req)
 {
-	/* Free output buffer if not already freed */
-	if (req->compound.out_buffer) {
-		free(req->compound.out_buffer);
-		req->compound.out_buffer = NULL;
-	}
+	struct fuse_compound_result *out_buffer = req->compound.out_buffer;
+
+	req->compound.out_buffer = NULL;
 
 	/* Destroy synchronization primitives */
 	pthread_mutex_destroy(&req->compound.waitq_lock);
 	pthread_cond_destroy(&req->compound.waitq);
+
+	return out_buffer;
+}
+
+static void compound_ctx_cleanup(fuse_req_t req)
+{
+	/* Free output buffer if not already freed */
+	free(compound_ctx_detach(req));
 }
 
 static bool execute_compound(fuse_req_t compound_req, const int index);
