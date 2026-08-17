@@ -285,14 +285,26 @@ static struct fuse_req *fuse_ll_alloc_req(struct fuse_session *se)
 static int fuse_write_msg_dev(struct fuse_session *se, struct fuse_chan *ch,
 			     struct iovec *iov, int count)
 {
+	int fd = ch ? ch->fd : se->fd;
 	ssize_t res;
+
+	/*
+	 * fuse_session_unmount() and fuse_session_destroy() drop se->fd, so a
+	 * reply or notification issued after the session loop returned has
+	 * nowhere to go. Fail it quietly instead of writing to a closed - and
+	 * possibly already reused - descriptor. A cloned channel fd is never
+	 * -1: fuse_chan_put() frees the channel along with closing it, and a
+	 * request holds a reference for as long as it may reply.
+	 */
+	if (fd == -1)
+		return -EBADF;
+
 	if (se->io != NULL)
 		/* se->io->writev is never NULL if se->io is not NULL as
 		   specified by fuse_session_custom_io()*/
-		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
-				     se->userdata);
+		res = se->io->writev(fd, iov, count, se->userdata);
 	else
-		res = writev(ch ? ch->fd : se->fd, iov, count);
+		res = writev(fd, iov, count);
 
 	int err = errno;
 
@@ -964,6 +976,7 @@ static int fuse_send_data_iov(struct fuse_session *se, struct fuse_chan *ch,
 	struct fuse_out_header *out = iov[0].iov_base;
 	struct fuse_ll_pipe *llp;
 	int splice_flags;
+	int fd;
 	size_t pipesize;
 	size_t total_buf_size;
 	size_t idx;
@@ -1130,17 +1143,24 @@ static int fuse_send_data_iov(struct fuse_session *se, struct fuse_chan *ch,
 	    (se->conn.want_ext & FUSE_CAP_SPLICE_MOVE))
 		splice_flags |= SPLICE_F_MOVE;
 
+	fd = ch ? ch->fd : se->fd;
+	if (fd == -1) {
+		/* Session torn down, see fuse_write_msg_dev() */
+		res = -EBADF;
+		goto clear_pipe;
+	}
+
 	if (se->io != NULL && se->io->splice_send != NULL) {
-		res = se->io->splice_send(llp->pipe[0], NULL,
-						  ch ? ch->fd : se->fd, NULL, out->len,
-					  	  splice_flags, se->userdata);
+		res = se->io->splice_send(llp->pipe[0], NULL, fd, NULL,
+					  out->len, splice_flags, se->userdata);
 	} else {
-		res = splice(llp->pipe[0], NULL, ch ? ch->fd : se->fd, NULL,
-			       out->len, splice_flags);
+		res = splice(llp->pipe[0], NULL, fd, NULL, out->len,
+			     splice_flags);
 	}
 	if (res == -1) {
 		res = -errno;
-		perror("fuse: splice from pipe");
+		if (!fuse_session_exited(se))
+			perror("fuse: splice from pipe");
 		goto clear_pipe;
 	}
 	if (res != out->len) {
@@ -4538,8 +4558,10 @@ void fuse_session_destroy(struct fuse_session *se)
 	pthread_mutex_destroy(&se->mt_lock);
 	pthread_mutex_destroy(&se->lock);
 	free(se->cuse_data);
-	if (se->fd != -1)
+	if (se->fd != -1) {
 		close(se->fd);
+		se->fd = -1;
+	}
 	/* Closing this lets the auto_unmount fusermount3 helper exit. */
 	if (se->auto_unmount_fd != -1)
 		close(se->auto_unmount_fd);
