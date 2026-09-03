@@ -62,6 +62,7 @@ static const struct fuse_opt fuse_mount_opts[] = {
 	FUSE_OPT_KEY("blkdev",			KEY_FUSERMOUNT_OPT),
 	FUSE_OPT_KEY("fsname=",			KEY_FUSERMOUNT_OPT),
 	FUSE_OPT_KEY("subtype=",		KEY_SUBTYPE_OPT),
+	FUSE_OPT_KEY("helper=",			KEY_MTAB_OPT),
 	FUSE_OPT_KEY("blksize=",		KEY_KERN_OPT),
 	FUSE_OPT_KEY("default_permissions",	KEY_KERN_OPT),
 	FUSE_OPT_KEY("context=",		KEY_KERN_OPT),
