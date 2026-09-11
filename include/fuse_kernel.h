@@ -497,6 +497,7 @@ struct fuse_file_lock {
 #define FUSE_OVER_IO_URING	(1ULL << 41)
 
 #define FUSE_ALIGN_PG_ORDER	(1ULL << 50)
+#define FUSE_SETATTR_WRITEBACK	(1ULL << 58)
 #define FUSE_URING_REDUCED_Q	(1ULL << 59)
 #define FUSE_INVAL_INODE_ENTRY  (1ULL << 60)
 #define FUSE_EXPIRE_INODE_ENTRY (1ULL << 61)
