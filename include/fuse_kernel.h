@@ -362,7 +362,7 @@ struct fuse_file_lock {
 /*
  * Not an attribute selector: marks the request as a kernel-initiated
  * writeback of locally owned attributes rather than a userspace-initiated
- * change.  Only sent by kernels that support it.
+ * change.  Only sent if the server negotiated FUSE_SETATTR_WRITEBACK.
  *
  * The bit is deliberately far above the sequentially allocated FATTR_*
  * range: libfuse mirrors these bits into its own FUSE_SET_ATTR_* space,
@@ -448,6 +448,8 @@ struct fuse_file_lock {
  *			optimal io-size alignment
  * FUSE_URING_REDUCED_Q: Client (kernel) supports less queues - Server is free
  *			 to register between 1 and nr-core io-uring queues
+ * FUSE_SETATTR_WRITEBACK: kernel marks writeback-initiated SETATTR requests
+ *			   with FATTR_WRITEBACK
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)

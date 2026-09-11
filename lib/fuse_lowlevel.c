@@ -3207,6 +3207,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		}
 		if (inargflags & FUSE_SECURITY_CTX)
 			se->conn.capable_ext |= FUSE_CAP_SECURITY_CTX;
+		if (inargflags & FUSE_SETATTR_WRITEBACK)
+			se->conn.capable_ext |= FUSE_CAP_SETATTR_WRITEBACK;
 	} else {
 		se->conn.max_readahead = 0;
 	}
@@ -3383,6 +3385,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		outargflags |= FUSE_EXPIRE_INODE_ENTRY;
 	if (se->conn.want_ext & FUSE_CAP_SECURITY_CTX)
 		outargflags |= FUSE_SECURITY_CTX;
+	if (se->conn.want_ext & FUSE_CAP_SETATTR_WRITEBACK)
+		outargflags |= FUSE_SETATTR_WRITEBACK;
 
 	if (se->conn.align_page_order) {
 		outargflags |= FUSE_ALIGN_PG_ORDER;

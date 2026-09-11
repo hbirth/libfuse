@@ -526,6 +526,16 @@ struct fuse_loop_config_v1 {
 #define FUSE_CAP_OVER_IO_URING (1ULL << 31)
 
 /**
+ * Indicates that the kernel marks SETATTR requests that originate from
+ * writeback of locally owned attributes (->write_inode()) with
+ * FATTR_WRITEBACK, surfaced to the filesystem as FUSE_SET_ATTR_WRITEBACK.
+ *
+ * This feature is disabled by default. If the filesystem supports it, it
+ * should be enabled by setting this flag in fuse_conn_info.want_ext.
+ */
+#define FUSE_CAP_SETATTR_WRITEBACK (1ULL << 58)
+
+/**
  * Indicates kernel io-uring supports reduced ring queues
  */
 #define FUSE_CAP_REDUCED_RING_QUEUES (1ULL << 59)

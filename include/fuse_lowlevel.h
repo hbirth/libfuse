@@ -175,9 +175,9 @@ enum fuse_notify_entry_flags {
 /*
  * Not an attribute selector: the request is the kernel writing back
  * attributes it owns locally, not a userspace-initiated change.  Only set
- * by kernels that support it.  Shares the value of the FATTR_WRITEBACK
- * wire bit, so it needs no translation - keep the two in sync when
- * changing either.
+ * if FUSE_CAP_SETATTR_WRITEBACK was negotiated.  Shares the value of the
+ * FATTR_WRITEBACK wire bit, so it needs no translation - keep the two in
+ * sync when changing either.
  */
 #define FUSE_SET_ATTR_WRITEBACK	(1 << 30)
 
@@ -380,7 +380,7 @@ struct fuse_lowlevel_ops {
 	 * these timestamps when needed, and (if desired) to implement mount options like
 	 * `noatime` or `relatime`.
 	 *
-	 * On kernels that support it, 'to_set' carries
+	 * If FUSE_CAP_SETATTR_WRITEBACK is enabled, 'to_set' carries
 	 * FUSE_SET_ATTR_WRITEBACK when the request comes from the kernel
 	 * writing back attributes it owns locally (the mtime and ctime of
 	 * the writeback cache) rather than from an explicit userspace

@@ -64,6 +64,7 @@ static const struct fuse_cap_name fuse_cap_names[] = {
 	{ FUSE_CAP_REDUCED_RING_QUEUES,		"FUSE_CAP_REDUCED_RING_QUEUES"},
 	{ FUSE_CAP_INVAL_INODE_ENTRY,		"FUSE_CAP_INVAL_INODE_ENTRY"},
 	{ FUSE_CAP_EXPIRE_INODE_ENTRY,		"FUSE_CAP_EXPIRE_INODE_ENTRY"},
+	{ FUSE_CAP_SETATTR_WRITEBACK,		"FUSE_CAP_SETATTR_WRITEBACK"},
 	// Add any new capabilities here
 	{ 0, NULL} // Sentinel to mark the end of the array
 };
