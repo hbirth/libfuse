@@ -916,11 +916,20 @@ int fuse_uring_stop(struct fuse_session *se)
 		struct fuse_ring_queue *queue = fuse_uring_get_queue(ring, qid);
 
 		// Signal the thread to stop using the eventfd
-		uint64_t value = 1;
-		write(queue->eventfd, &value, sizeof(value));
+		if (queue->eventfd >= 0)
+		{
+		    uint64_t value = 1;
+		    write(queue->eventfd, &value, sizeof(value));
+		}
+
 		if (!se->op.init_ring_ext_threads)
 			pthread_join(queue->tid, NULL);
-		close(queue->eventfd);
+
+		if (queue->eventfd >= 0)
+		{
+		    close(queue->eventfd);
+		    queue->eventfd = -1;
+		}
 	}
 
 	/* API bug workaround - no control when the queues are needed */
