@@ -1242,6 +1242,7 @@ static void lo_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask,
 	else
 		fd = lo_fd(req, ino);
 
+	flags &= ~FUSE_STATX_FLAG_LIGHT;
 	res = statx(fd, "", flags | AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW, mask, &buf);
 	if (res == -1)
 		fuse_reply_err(req, errno);

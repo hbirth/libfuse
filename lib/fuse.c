@@ -4503,6 +4503,7 @@ static void fuse_lib_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask,
 	int err;
 
 	memset(&stxbuf, 0, sizeof(stxbuf));
+	flags &= ~FUSE_STATX_LIGHT;
 
 	if (fi != NULL)
 		err = get_path_nullok(f, ino, &path);

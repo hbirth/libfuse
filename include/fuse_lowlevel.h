@@ -181,6 +181,17 @@ enum fuse_notify_entry_flags {
  */
 #define FUSE_SET_ATTR_WRITEBACK	(1 << 30)
 
+/*
+ * 'flags' in statx, beside the AT_STATX_* values: the caller does not need
+ * cluster-coherent size, blocks, mtime and ctime, so the filesystem may
+ * answer from its current values without recalling locks other clients
+ * hold.  Not a statx(2) flag - clear it before passing 'flags' on to
+ * statx(2), which rejects it with EINVAL.  Shares the value of the
+ * FUSE_STATX_LIGHT wire bit, so it needs no translation - keep the two in
+ * sync when changing either.
+ */
+#define FUSE_STATX_FLAG_LIGHT	(1U << 31)
+
 /**
  * Type of the dlm lock requested
  */
@@ -1394,7 +1405,8 @@ struct fuse_lowlevel_ops {
 	 *
 	 * @param req request handle
 	 * @param ino the inode number
-	 * @param flags bitmask of requested flags
+	 * @param flags bitmask of requested flags (AT_STATX_* and
+	 *              FUSE_STATX_FLAG_LIGHT)
 	 * @param mask bitmask of requested fields
 	 * @param fi file information (may be NULL)
 	 */
