@@ -741,6 +741,8 @@ struct fuse_lowlevel_ops {
 	 * fi->fh will contain the value set by the open method, or will
 	 * be undefined if the open method didn't set any value.
 	 * fi->flags will contain the same flags as for open.
+	 * fi->cached_read is set if the user read from the page cache without
+	 * a read request reaching the filesystem.
 	 *
 	 * Valid replies:
 	 *   fuse_reply_err

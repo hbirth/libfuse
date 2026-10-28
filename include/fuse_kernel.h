@@ -513,9 +513,15 @@ struct fuse_file_lock {
 
 /**
  * Release flags
+ *
+ * FUSE_RELEASE_CACHED_READ: the user read from the page cache: a read(2),
+ *			     splice or sendfile on this handle returned data
+ *			     while no FUSE_READ went out on the handle, so the
+ *			     server never saw that read, e.g. for atime.
  */
 #define FUSE_RELEASE_FLUSH	(1 << 0)
 #define FUSE_RELEASE_FLOCK_UNLOCK	(1 << 1)
+#define FUSE_RELEASE_CACHED_READ	(1U << 31)
 
 /**
  * Getattr flags

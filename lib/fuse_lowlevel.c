@@ -2285,6 +2285,8 @@ static void _do_release(fuse_req_t req, const fuse_ino_t nodeid,
 		fi.flock_release = 1;
 		fi.lock_owner = arg->lock_owner;
 	}
+	if (arg->release_flags & FUSE_RELEASE_CACHED_READ)
+		fi.cached_read = 1;
 
 	if (req->se->op.release)
 		req->se->op.release(req, nodeid, &fi);

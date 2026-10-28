@@ -97,8 +97,14 @@ struct fuse_file_info {
 	    file */
 	uint32_t parallel_direct_writes : 1;
 
+	/** Set in release() when the user read from the page cache: a
+	    read, splice or sendfile on this file handle returned data
+	    while no read request went out on the handle, so the filesystem
+	    never saw that read, e.g. to update atime. */
+	uint32_t cached_read : 1;
+
 	/** Padding.  Reserved for future use*/
-	uint32_t padding : 23;
+	uint32_t padding : 22;
 	uint32_t padding2 : 32;
 	uint32_t padding3 : 32;
 
